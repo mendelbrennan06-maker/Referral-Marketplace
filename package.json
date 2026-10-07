@@ -14,7 +14,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "admin:create": "tsx scripts/create-admin.ts",
-    "db:local": "tsx scripts/setup-local.ts"
+    "db:local": "tsx scripts/setup-local.ts",
+    "deploy:prepare": "tsx scripts/deploy-prepare.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",

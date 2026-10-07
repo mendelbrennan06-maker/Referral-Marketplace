@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
+import { site } from '@/lib/config';
 
 /** Never initializes live Stripe. Every provider flow in this MVP is test-only. */
 export function testStripe() {
@@ -31,7 +32,7 @@ export async function createTestDepositCheckout(userId: string, amountCents: num
       mode: 'payment', client_reference_id: userId,
       metadata: { depositId: deposit.id, userId, purpose: 'wallet-test-deposit' },
       payment_intent_data: { metadata: { depositId: deposit.id, userId, purpose: 'wallet-test-deposit' } },
-      line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: amountCents, product_data: { name: 'ReferMarket TEST wallet deposit — simulated payment' } } }],
+      line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: amountCents, product_data: { name: `${site.name} TEST wallet deposit — simulated payment` } } }],
       success_url: `${applicationUrl()}/dashboard/wallet?checkout=returned`,
       cancel_url: `${applicationUrl()}/dashboard/wallet?checkout=cancelled`,
     }, { idempotencyKey: key });

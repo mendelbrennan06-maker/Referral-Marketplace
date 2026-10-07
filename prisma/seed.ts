@@ -70,8 +70,8 @@ async function seed() {
   }
   if (process.env.PAYMENT_MODE !== "demo") throw new Error("Demo data requires an explicitly configured PAYMENT_MODE=demo.");
   const password = process.env.DEMO_PASSWORD;
-  if (!password || password.length < 12 || password.length > 128) {
-    throw new Error("Provide DEMO_PASSWORD securely (12–128 characters). There is no default demo password.");
+  if (!password || password.length < 12 || password.length > 72 || Buffer.byteLength(password, "utf8") > 72) {
+    throw new Error("Provide DEMO_PASSWORD securely (at least 12 characters, at most 72 UTF-8 bytes). There is no default demo password.");
   }
   const passwordHash = await bcrypt.hash(password, 12);
   const now = new Date();

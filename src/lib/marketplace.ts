@@ -108,6 +108,7 @@ const progress: Partial<Record<TransactionState, TransactionState[]>> = {
 };
 
 export function canTransition(from: TransactionState, to: TransactionState, actor: TransactionActor) {
+  if (!["referred", "referrer", "admin"].includes(actor)) return false;
   if (from === to || ["PAID", "REJECTED", "CANCELLED"].includes(from)) return false;
   if (to === "DISPUTED") return from !== "DISPUTED";
   if (to === "CANCELLED") return actor !== "referrer" && (["PENDING", "LINK_OPENED", "SIGNUP_REPORTED"].includes(from) || (actor === "admin" && from === "DISPUTED"));

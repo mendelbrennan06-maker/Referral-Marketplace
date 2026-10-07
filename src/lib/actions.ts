@@ -39,7 +39,9 @@ function integer(data: FormData, name: string, min: number, max: number) {
 }
 function checked(data: FormData, name: string) { return ['on', 'true', '1'].includes(input(data, name)); }
 function countryList(data: FormData) {
-  return [...new Set(input(data, 'countries', 300).split(',').map(x => x.trim().toUpperCase()).filter(Boolean))];
+  const countries = [...new Set(input(data, 'countries', 300).split(',').map(x => x.trim().toUpperCase()).filter(Boolean))];
+  if (countries.some(country => !/^[A-Z]{2}$/.test(country))) throw new Error('Use two-letter country codes separated by commas, such as US, GB, CA.');
+  return countries;
 }
 function refresh(transactionId?: string) {
   for (const path of ['/dashboard', '/dashboard/wallet', '/dashboard/listings', '/dashboard/transactions', '/dashboard/notifications', '/admin', '/admin/transactions', '/admin/verification', '/admin/payments', '/admin/disputes', '/marketplace']) revalidatePath(path);
@@ -113,7 +115,7 @@ export async function loginAction(_state: ActionState, data: FormData) {
     await rateLimit('login-ip', await requestIdentity(), 20);
     await rateLimit('login-email', email, 10);
     const password = data.get('password');
-    if (typeof password !== 'string' || password.length > 72) return { error: 'Email or password is incorrect.' };
+    if (typeof password !== 'string' || password.length > 72 || Buffer.byteLength(password, 'utf8') > 72) return { error: 'Email or password is incorrect.' };
     const user = await db.user.findUnique({ where: { email } });
     // Constant-cost comparison also applies to unknown accounts.
     const valid = await bcrypt.compare(password, user?.passwordHash || '$2b$12$K9Iy/YBOItdePAfoGnCioe2Q2hkOJuoGXFn.nJ/CXeb05md.fKa7K');
@@ -143,6 +145,9 @@ export async function createListingAction(_state: ActionState, data: FormData) {
     const bountyCents = money(data, 'bounty');
     if (bountyCents < 100 || bountyCents > referrerRewardCents) throw new Error('Offer at least $1 and no more than the reward you expect.');
     const slots = integer(data, 'slots', 1, 500);
+    const countries = countryList(data);
+    if (countries.length === 0) throw new Error('Choose at least one eligible country.');
+    if (program.countries.length && countries.some(country => !program.countries.includes(country))) throw new Error('The listing’s countries must be included in the program’s eligible countries.');
     const rewardType = z.enum(RewardType).parse(input(data, 'rewardType'));
     const expires = input(data, 'expiresAt', 100);
     const expiresAt = expires ? new Date(expires) : null;
@@ -154,7 +159,7 @@ export async function createListingAction(_state: ActionState, data: FormData) {
     await db.referralListing.create({ data: {
       referrerId: user.id, programId, referralUrl, referralCode: input(data, 'referralCode', 100) || null,
       referrerRewardCents, bountyCents, rewardType, totalSlots: slots, availableSlots: slots, expiresAt,
-      countries: countryList(data), requirements: input(data, 'requirements'), notes: input(data, 'notes'),
+      countries, requirements: input(data, 'requirements'), notes: input(data, 'notes'),
       status: 'PENDING_APPROVAL', isFunded: (user.wallet?.availableCents || 0) >= bountyCents, isDemo: isDemoMode(),
     } });
     refresh();
