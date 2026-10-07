@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: refermarket
+          POSTGRES_USER: refermarket
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://refermarket:ci-only-password@127.0.0.1:5432/refermarket?schema=public
+      AUTH_SECRET: ci-only-authentication-key-not-used-in-production
+      APP_URL: http://localhost:3000
+      PAYMENT_MODE: demo
+      DEMO_SEED: 'true'
+      DEMO_PASSWORD: ci-only-demo-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate && npm run db:migrate && npm run db:seed
+      - run: npm run typecheck && npm run lint && npm test && npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run start > /tmp/refermarket.log 2>&1 &
+      - run: npm run test:e2e
