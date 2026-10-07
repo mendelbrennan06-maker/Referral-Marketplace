@@ -5,11 +5,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 FROM base AS build
 COPY package.json package-lock.json ./
-# Optional public trust certificate for environments with an HTTPS inspection proxy.
-# The build mount is ephemeral and never copied into the runtime image.
-RUN --mount=type=secret,id=build_ca \
-    if [ -s /run/secrets/build_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build_ca; fi; \
-    npm ci --no-audit --no-fund
+# Optional PUBLIC trust certificate for a local HTTPS inspection proxy.
+# Never use this build argument for private keys or credentials.
+ARG BUILD_CA_PEM
+RUN if [ -n "$BUILD_CA_PEM" ]; then \
+      printf '%s\n' "$BUILD_CA_PEM" > /tmp/build-ca.crt; \
+      export NODE_EXTRA_CA_CERTS=/tmp/build-ca.crt; \
+    fi; \
+    npm ci --no-audit --no-fund && rm -f /tmp/build-ca.crt
 COPY . .
 RUN npm run build
 

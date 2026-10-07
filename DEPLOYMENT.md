@@ -22,7 +22,7 @@ For an intentionally public demo, create secure `DEMO_PASSWORD`, `ADMIN_EMAIL`, 
 
 The application service uses the repository Dockerfile. Railway's pre-deploy command runs `npm run deploy:prepare` (migrations plus the explicitly guarded one-time initializer); startup runs `npm run start`. Health check `/api/health` validates configuration and PostgreSQL as well as the application. An injected `PORT` is respected by Next.js; set `PORT=3000` when the generated domain targets port 3000. Generate the Railway domain, set `APP_URL` to it, redeploy if needed, and verify actual page responses.
 
-For local container builds behind the cloud environment's HTTPS inspection proxy, pass its provided public CA using BuildKit's ephemeral `build_ca` mount. Do not disable TLS verification. Ordinary Railway builds need no proxy certificate. Container build must succeed without a database connection or a committed `.env`.
+For local container builds behind the cloud environment's HTTPS inspection proxy, pass its provided **public** CA in the optional `BUILD_CA_PEM` build argument. The temporary certificate is removed in the same build step and never included in the runtime image. Never pass private keys or credentials in this argument. Do not disable TLS verification. Ordinary Railway builds need no proxy certificate. Container build must succeed without a database connection or a committed `.env`.
 
 ## Administrator
 
