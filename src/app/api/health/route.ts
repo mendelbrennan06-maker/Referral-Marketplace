@@ -10,7 +10,13 @@ export async function GET() {
     const url = new URL(process.env.APP_URL || '');
     if (!['http:', 'https:'].includes(url.protocol) || (process.env.NODE_ENV === 'production' && url.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw new Error('Invalid application URL.');
     if (paymentMode === 'unconfigured') throw new Error('Unconfigured payment mode.');
-    await db.$queryRaw`SELECT 1`;
+    const [fee] = await Promise.all([
+      db.feeSetting.findUnique({ where: { id: 'global' } }),
+      db.program.findFirst({ select: { id: true } }),
+      db.user.findFirst({ select: { id: true } }),
+      db.referralTransaction.findFirst({ select: { id: true } }),
+    ]);
+    if (!fee) throw new Error('Marketplace initialization is incomplete.');
     return Response.json({ status: 'ok', database: 'ready', paymentMode }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     return Response.json({ status: 'unavailable', readiness: 'Database or application configuration is unavailable.' }, { status: 503, headers: { 'Cache-Control': 'no-store' } });

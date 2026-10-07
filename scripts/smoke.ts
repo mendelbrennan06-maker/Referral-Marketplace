@@ -262,6 +262,12 @@ async function main() {
     assert.equal((await db.referralListing.findUniqueOrThrow({ where: { id: listing.id } })).availableSlots, 1);
     pass('Reusing the same offer cannot create a duplicate transaction, reservation, or slot decrement');
 
+    await buyer.goto(`/dashboard/transactions/${transaction.id}`);
+    await buyer.getByRole('link', { name: /Open tracked referral link/ }).waitFor();
+    await buyer.waitForLoadState('networkidle');
+    assert.equal(await db.referralClick.count({ where: { transactionId: transaction.id } }), 0, 'Merely displaying the transaction must not prefetch its tracked redirect or record a click.');
+    pass('Displaying the transaction does not open or prefetch the tracked referral link');
+
     const destination = await buyer.context().request.get(`/go/${transaction.id}?url=https://attacker.example.net/steal`, { maxRedirects: 0 });
     assert.equal(destination.status(), 302);
     assert.equal(destination.headers().location, referralUrl);
@@ -399,7 +405,8 @@ async function main() {
     const mobile = await newPage('mobile', true);
     await mobile.goto('/marketplace');
     await mobile.getByRole('heading', { level: 1 }).waitFor();
-    assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, 'The mobile marketplace must not overflow horizontally.');
+    await mobile.waitForLoadState('networkidle');
+    assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1 && document.documentElement.clientWidth <= 391), true, 'The mobile marketplace must fit its 390-pixel viewport without horizontal overflow.');
     await mobile.screenshot({ path: `${artifacts}/marketplace-mobile.png`, fullPage: true });
     pass('Desktop and mobile UI screenshots are saved; mobile marketplace has no horizontal overflow');
     assert.deepEqual(browserErrors, [], 'Browser pages should have no JavaScript exceptions or console errors.');
