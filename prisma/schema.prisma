@@ -1,0 +1,546 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum RestrictionStatus {
+  ALLOWED
+  RESTRICTED
+  UNKNOWN
+  PROHIBITED
+}
+
+enum RewardType {
+  CASH
+  POINTS
+  MILES
+  CREDIT
+  GIFT_CARD
+  DISCOUNT
+  FREE_SERVICE
+  OTHER
+}
+
+enum ListingStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  REJECTED
+  DISABLED
+}
+
+enum TransactionStatus {
+  PENDING
+  LINK_OPENED
+  SIGNUP_REPORTED
+  AWAITING_VERIFICATION
+  VERIFIED
+  PAYOUT_PENDING
+  PAID
+  DISPUTED
+  REJECTED
+  CANCELLED
+}
+
+enum LedgerType {
+  DEPOSIT
+  RESERVATION
+  RELEASE
+  BOUNTY_PAYMENT
+  BOUNTY_RECEIPT
+  MARKETPLACE_FEE
+  WITHDRAWAL
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+}
+
+enum SwapDirection {
+  NEED
+  HAVE
+}
+
+model User {
+  id                 String                     @id @default(cuid())
+  email              String                     @unique
+  passwordHash       String
+  role               UserRole                   @default(USER)
+  isSuspended        Boolean                    @default(false)
+  emailVerified      Boolean                    @default(false)
+  stripeAccountId    String?                    @unique
+  stripeCustomerId   String?                    @unique
+  isDemo             Boolean                    @default(false)
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+  profile            Profile?
+  sessions           Session[]
+  wallet             Wallet?
+  listings           ReferralListing[]
+  referralsOffered   ReferralTransaction[]      @relation("TransactionReferrer")
+  referralsUsed      ReferralTransaction[]      @relation("TransactionCustomer")
+  statusChanges      TransactionStatusHistory[]
+  clicks             ReferralClick[]
+  deposits           Deposit[]
+  payouts            Payout[]
+  writtenReviews     Review[]                   @relation("ReviewAuthor")
+  receivedReviews    Review[]                   @relation("ReviewSubject")
+  messages           Message[]
+  openedDisputes     Dispute[]                  @relation("DisputeOpener")
+  resolvedDisputes   Dispute[]                  @relation("DisputeResolver")
+  notifications      Notification[]
+  adminActions       AdminAction[]
+  fraudFlags         FraudFlag[]                @relation("FlaggedUser")
+  resolvedFraudFlags FraudFlag[]                @relation("FraudResolver")
+  policyChanges      ProgramRestriction[]
+  termsChecks        ProgramTermsHistory[]
+  feeChanges         FeeSetting[]
+  evidence           UploadedEvidence[]
+  swapInterests      ReferralSwapInterest[]
+
+  @@index([role, isSuspended])
+  @@index([createdAt])
+}
+
+model Profile {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  username         String   @unique
+  displayName      String
+  bio              String   @default("")
+  avatarUrl        String?
+  identityVerified Boolean  @default(false)
+  phoneVerified    Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  name        String
+  description String    @default("")
+  isDemo      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  programs    Program[]
+}
+
+model Program {
+  id                           String                 @id @default(cuid())
+  slug                         String                 @unique
+  name                         String
+  description                  String
+  logoUrl                      String?
+  brandColor                   String                 @default("#485B42")
+  officialDomain               String
+  officialBenefit              String                 @default("")
+  referrerRewardCents          Int                    @default(0)
+  rewardType                   RewardType             @default(CASH)
+  categoryId                   String
+  countries                    String[]               @default([])
+  eligibilityNotes             String                 @default("")
+  qualificationDays            Int                    @default(30)
+  restrictionStatus            RestrictionStatus      @default(UNKNOWN)
+  publicSharingAllowed         Boolean                @default(false)
+  cashBountyAllowed            Boolean                @default(false)
+  thirdPartyMarketplaceAllowed Boolean                @default(false)
+  paidPromotionAllowed         Boolean                @default(false)
+  termsUrl                     String?
+  termsLastChecked             DateTime?
+  lastVerifiedAt               DateTime?
+  adminNotes                   String                 @default("")
+  isDemo                       Boolean                @default(false)
+  createdAt                    DateTime               @default(now())
+  updatedAt                    DateTime               @updatedAt
+  category                     Category               @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  listings                     ReferralListing[]
+  transactions                 ReferralTransaction[]
+  clicks                       ReferralClick[]
+  restriction                  ProgramRestriction?
+  termsHistory                 ProgramTermsHistory[]
+  swapInterests                ReferralSwapInterest[]
+
+  @@index([categoryId, restrictionStatus])
+  @@index([lastVerifiedAt])
+}
+
+model ReferralListing {
+  id                  String                @id @default(cuid())
+  referrerId          String
+  programId           String
+  referralUrl         String
+  approvedReferralUrl String?
+  referralCode        String?
+  referrerRewardCents Int
+  bountyCents         Int
+  rewardType          RewardType            @default(CASH)
+  availableSlots      Int                   @default(1)
+  totalSlots          Int                   @default(1)
+  expiresAt           DateTime?
+  countries           String[]              @default([])
+  requirements        String                @default("")
+  notes               String                @default("")
+  status              ListingStatus         @default(PENDING_APPROVAL)
+  isFunded            Boolean               @default(false)
+  isDemo              Boolean               @default(false)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  referrer            User                  @relation(fields: [referrerId], references: [id], onDelete: Restrict)
+  program             Program               @relation(fields: [programId], references: [id], onDelete: Restrict)
+  transactions        ReferralTransaction[]
+  clicks              ReferralClick[]
+  fraudFlags          FraudFlag[]
+
+  @@index([programId, status, bountyCents])
+  @@index([referrerId, status])
+  @@index([expiresAt])
+}
+
+model ReferralTransaction {
+  id                  String                     @id @default(cuid())
+  listingId           String
+  programId           String
+  referrerId          String
+  referredUserId      String
+  bountyCents         Int
+  feeCents            Int
+  netPayoutCents      Int
+  reservedCents       Int                        @default(0)
+  status              TransactionStatus          @default(PENDING)
+  completionNote      String?
+  referrerConfirmedAt DateTime?
+  completedAt         DateTime?
+  adminNotes          String?
+  isDemo              Boolean                    @default(false)
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  listing             ReferralListing            @relation(fields: [listingId], references: [id], onDelete: Restrict)
+  program             Program                    @relation(fields: [programId], references: [id], onDelete: Restrict)
+  referrer            User                       @relation("TransactionReferrer", fields: [referrerId], references: [id], onDelete: Restrict)
+  referredUser        User                       @relation("TransactionCustomer", fields: [referredUserId], references: [id], onDelete: Restrict)
+  statusHistory       TransactionStatusHistory[]
+  clicks              ReferralClick[]
+  ledger              WalletTransaction[]
+  payouts             Payout[]
+  reviews             Review[]
+  messages            Message[]
+  disputes            Dispute[]
+  evidence            UploadedEvidence[]
+  fraudFlags          FraudFlag[]
+
+  @@unique([listingId, referredUserId])
+  @@index([referrerId, status])
+  @@index([referredUserId, status])
+  @@index([status, createdAt])
+}
+
+model TransactionStatusHistory {
+  id            String              @id @default(cuid())
+  transactionId String
+  actorId       String?
+  fromStatus    TransactionStatus?
+  toStatus      TransactionStatus
+  note          String              @default("")
+  createdAt     DateTime            @default(now())
+  transaction   ReferralTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  actor         User?               @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([transactionId, createdAt])
+}
+
+model ReferralClick {
+  id            String              @id @default(cuid())
+  transactionId String
+  userId        String
+  listingId     String
+  programId     String
+  createdAt     DateTime            @default(now())
+  transaction   ReferralTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  user          User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  listing       ReferralListing     @relation(fields: [listingId], references: [id], onDelete: Restrict)
+  program       Program             @relation(fields: [programId], references: [id], onDelete: Restrict)
+
+  @@index([transactionId, createdAt])
+  @@index([listingId, createdAt])
+}
+
+model Wallet {
+  id                    String              @id @default(cuid())
+  userId                String              @unique
+  availableCents        Int                 @default(0)
+  reservedCents         Int                 @default(0)
+  pendingCents          Int                 @default(0)
+  lifetimeEarningsCents Int                 @default(0)
+  lifetimePayoutsCents  Int                 @default(0)
+  feesPaidCents         Int                 @default(0)
+  isDemo                Boolean             @default(false)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  transactions          WalletTransaction[]
+}
+
+model WalletTransaction {
+  id             String               @id @default(cuid())
+  walletId       String
+  transactionId  String?
+  type           LedgerType
+  amountCents    Int
+  availableDelta Int                  @default(0)
+  reservedDelta  Int                  @default(0)
+  pendingDelta   Int                  @default(0)
+  description    String
+  idempotencyKey String               @unique
+  isDemo         Boolean              @default(false)
+  createdAt      DateTime             @default(now())
+  wallet         Wallet               @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  transaction    ReferralTransaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  @@index([walletId, createdAt])
+  @@index([transactionId])
+}
+
+model Deposit {
+  id                String        @id @default(cuid())
+  userId            String
+  amountCents       Int
+  status            PaymentStatus @default(PENDING)
+  provider          String        @default("demo")
+  providerReference String?       @unique
+  stripeSessionId   String?       @unique
+  idempotencyKey    String        @unique
+  isDemo            Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  user              User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+}
+
+model Payout {
+  id                String               @id @default(cuid())
+  userId            String
+  transactionId     String?              @unique
+  amountCents       Int
+  status            PaymentStatus        @default(PENDING)
+  provider          String               @default("demo")
+  providerReference String?              @unique
+  idempotencyKey    String               @unique
+  isDemo            Boolean              @default(false)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  transaction       ReferralTransaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  @@index([userId, status])
+  @@index([transactionId])
+}
+
+model Review {
+  id            String              @id @default(cuid())
+  transactionId String
+  reviewerId    String
+  subjectId     String
+  reviewerRole  String
+  rating        Int
+  body          String              @default("")
+  isDemo        Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  transaction   ReferralTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  reviewer      User                @relation("ReviewAuthor", fields: [reviewerId], references: [id], onDelete: Restrict)
+  subject       User                @relation("ReviewSubject", fields: [subjectId], references: [id], onDelete: Restrict)
+
+  @@unique([transactionId, reviewerId])
+  @@index([subjectId, createdAt])
+}
+
+model Message {
+  id            String              @id @default(cuid())
+  transactionId String
+  senderId      String
+  body          String
+  isDemo        Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  transaction   ReferralTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  sender        User                @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([transactionId, createdAt])
+}
+
+model Dispute {
+  id            String              @id @default(cuid())
+  transactionId String              @unique
+  openedById    String
+  reason        String
+  details       String
+  status        DisputeStatus       @default(OPEN)
+  resolution    String?
+  resolvedById  String?
+  resolvedAt    DateTime?
+  isDemo        Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  transaction   ReferralTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  openedBy      User                @relation("DisputeOpener", fields: [openedById], references: [id], onDelete: Restrict)
+  resolvedBy    User?               @relation("DisputeResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  href      String?
+  readAt    DateTime?
+  isDemo    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model ProgramRestriction {
+  id          String            @id @default(cuid())
+  programId   String            @unique
+  status      RestrictionStatus @default(UNKNOWN)
+  reason      String
+  updatedById String?
+  isDemo      Boolean           @default(false)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  program     Program           @relation(fields: [programId], references: [id], onDelete: Restrict)
+  updatedBy   User?             @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model ProgramTermsHistory {
+  id          String   @id @default(cuid())
+  programId   String
+  termsUrl    String?
+  summary     String
+  checkedById String?
+  checkedAt   DateTime @default(now())
+  isDemo      Boolean  @default(false)
+  program     Program  @relation(fields: [programId], references: [id], onDelete: Restrict)
+  checkedBy   User?    @relation(fields: [checkedById], references: [id], onDelete: SetNull)
+
+  @@index([programId, checkedAt])
+}
+
+model AdminAction {
+  id         String   @id @default(cuid())
+  adminId    String
+  action     String
+  entityType String
+  entityId   String
+  details    Json?
+  isDemo     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  admin      User     @relation(fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([adminId, createdAt])
+}
+
+model FraudFlag {
+  id            String               @id @default(cuid())
+  userId        String?
+  listingId     String?
+  transactionId String?
+  reason        String
+  severity      String               @default("MEDIUM")
+  resolvedAt    DateTime?
+  resolvedById  String?
+  isDemo        Boolean              @default(false)
+  createdAt     DateTime             @default(now())
+  user          User?                @relation("FlaggedUser", fields: [userId], references: [id], onDelete: Restrict)
+  resolvedBy    User?                @relation("FraudResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  listing       ReferralListing?     @relation(fields: [listingId], references: [id], onDelete: Restrict)
+  transaction   ReferralTransaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  @@index([resolvedAt, severity])
+}
+
+model FeeSetting {
+  id            String   @id @default("global")
+  percentageBps Int      @default(1000)
+  fixedCents    Int      @default(0)
+  minCents      Int      @default(0)
+  maxCents      Int?
+  updatedById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  updatedBy     User?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model UploadedEvidence {
+  id            String              @id @default(cuid())
+  transactionId String
+  uploadedById  String
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  data          Bytes
+  isDemo        Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  transaction   ReferralTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  uploadedBy    User                @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([transactionId, createdAt])
+}
+
+model ReferralSwapInterest {
+  id        String        @id @default(cuid())
+  userId    String
+  programId String
+  direction SwapDirection
+  isDemo    Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  program   Program       @relation(fields: [programId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, programId, direction])
+}
+
+model RateLimitBucket {
+  key       String   @id
+  count     Int      @default(1)
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([resetAt])
+}
