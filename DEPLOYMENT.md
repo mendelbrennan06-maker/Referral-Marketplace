@@ -38,4 +38,14 @@ Run the browser smoke test only against an isolated seeded demo environment. Dep
 
 Never run `prisma migrate reset` or `db push --force-reset` on production. Back up PostgreSQL before schema changes; review migrations and use a Railway pre-deploy hook. Redeployments do not reset/reseed. Keep PostgreSQL private; use Railway's service connection for the app. Evidence bytes live in PostgreSQL and survive app redeployment. Establish backup recovery, monitoring, email delivery, password recovery, evidence retention, and program terms review before admitting real users or money.
 
-Live payments require a separate funded database, fully implemented Stripe Connect reconciliation and payout state handling, verified program permissions, appropriate operational/legal readiness, and explicit owner authorization. The MVP does not claim compliant escrow.
+Live payments require a separate funded database, an approved provider and fully implemented collection/settlement reconciliation and payout state handling, verified program permissions, appropriate operational/legal readiness, and explicit owner authorization. The MVP does not claim compliant escrow.
+
+## Post-verification and monitoring release
+
+Use `PAYMENT_PROVIDER=demo` (or explicit manual record mode). Live-money adapters are disabled. Preserve existing secrets and database; pre-deploy applies additive migrations and guarded catalog preparation without resetting existing data. Existing transactions are backfilled as LEGACY_WALLET, retaining their original financial snapshots.
+
+The separate GitHub-backed `program-monitor` service uses its Railway service configuration, runs hourly (`0 * * * *`, UTC), and exits after `npm run monitor:daily`. It selects programs due by their default 24-hour cadence. Configure `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PAYMENT_PROVIDER=demo`, concurrency/delay/retry settings, and no HTTP healthcheck or web start command. The web service retains its migration pre-deploy command and `/api/health`. Legacy config files are retained under `deploy/` as references because Railway now rejects their config-file selector. Deploy web/migrations first, then enable the scheduled worker. Inspect MonitoringRun and Railway logs to verify actual dispatch.
+
+Schema migrations never reset production. Existing append-only histories prevent erasure. Review migrations and establish backups before real-money use. Validate existing users, listings and history after deployment. Scheduled demo sources remain simulated; ordinary official HTML often needs manual review rather than automatic verified amounts.
+
+`node --import tsx scripts/verify-deployment.ts` optionally checks authenticated deployed routes when `VERIFY_DEPLOYMENT=true`. Supply `VERIFY_ADMIN_EMAIL` and `VERIFY_ADMIN_PASSWORD` as Railway reference variables; it never prints credentials or response bodies. Clear these verification variables after the rollout.

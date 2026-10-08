@@ -1,0 +1,1 @@
+export function Disclosure(){return <div className="disclosure marketplace-disclosure"><p>Additional cash offers are provided by individual referrers, not by the company shown above. The referrer may receive compensation from the company if you use their referral link.</p></div>;}

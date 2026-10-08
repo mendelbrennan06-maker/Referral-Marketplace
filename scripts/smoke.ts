@@ -100,7 +100,7 @@ function actionForm(page: Page, field: string, value: string): Locator {
 async function fillListing(page: Page, programId: string, referralUrl: string, marker: string) {
   await page.locator('[name="programId"]').selectOption(programId);
   await page.locator('[name="referralUrl"]').fill(referralUrl);
-  await page.locator('[name="expectedReward"]').fill('100');
+
   await page.locator('[name="bounty"]').fill('50');
   await page.locator('[name="slots"]').fill('2');
   await page.locator('[name="countries"]').fill('US');
@@ -200,21 +200,12 @@ async function main() {
 
     const prohibited = await db.program.findFirstOrThrow({ where: { restrictionStatus: { in: ['UNKNOWN', 'RESTRICTED', 'PROHIBITED'] } } });
     await seller.goto('/dashboard/listings/new');
-    await fillListing(seller, program.id, referralUrl, `${listingMarker} prohibited`);
-    await seller.locator('[name="programId"]').evaluate((node, programId) => {
-      const select = node as HTMLSelectElement;
-      select.add(new Option('Tampered unavailable program', programId));
-      select.value = programId;
-    }, prohibited.id);
-    await seller.getByRole('button', { name: /Submit for review/ }).click();
-    await seller.locator('form [role="alert"]').waitFor();
-    assert.equal(await db.referralListing.count({ where: { referrerId: sellerUser.id } }), 0);
-    pass('Server rejects unavailable programs even when the browser’s allowed-program selector is tampered');
-
-    await seller.goto('/dashboard/listings/new');
     await fillListing(seller, program.id, referralUrl, listingMarker);
-    await seller.getByRole('button', { name: /Submit for review/ }).click();
+    const createRequest=await captureAction(seller,()=>seller.getByRole('button', { name: /Submit for review/ }).click());
     await seller.waitForURL('**/dashboard/listings');
+    await replay(seller.context(),createRequest,{from:program.id,to:prohibited.id});
+    assert.equal(await db.referralListing.count({where:{referrerId:sellerUser.id}}),1);
+    pass('Server rejects a restricted program even when a valid listing action is replayed with tampered data');
     const listing = await db.referralListing.findFirstOrThrow({ where: { referrerId: sellerUser.id, notes: listingMarker } });
     assert.equal(listing.status, 'PENDING_APPROVAL');
     assert.equal(listing.bountyCents, 5_000);
@@ -226,7 +217,7 @@ async function main() {
     await eventually(() => db.referralListing.findUniqueOrThrow({ where: { id: listing.id } }), value => value.status === 'ACTIVE', 'admin listing approval');
     const approved = await db.referralListing.findUniqueOrThrow({ where: { id: listing.id } });
     assert.equal(approved.approvedReferralUrl, referralUrl);
-    pass('A funded $50 demo listing is created pending review and approved by an admin');
+    pass('A standard $50 demo listing is created pending review and approved by an admin');
 
     const auditBefore = await db.adminAction.count({ where: { entityId: listing.id } });
     await replay(outsider.context(), approvalRequest, { from: 'ACTIVE', to: 'DISABLED' });
@@ -241,24 +232,24 @@ async function main() {
     assert.equal(transaction.status, 'PENDING');
     assert.equal(transaction.bountyCents, 5_000);
     assert.equal(transaction.feeCents, 500, 'The documented demo seed uses a 10% success fee.');
-    assert.equal(transaction.netPayoutCents, 4_500);
-    assert.equal(transaction.netPayoutCents + transaction.feeCents, transaction.bountyCents);
+    assert.equal(transaction.netPayoutCents, 5_000);
+    assert.equal(transaction.bountyCents + transaction.feeCents, transaction.totalDebitCents);
     const reserved = await db.wallet.findUniqueOrThrow({ where: { userId: sellerUser.id } });
-    assert.equal(reserved.availableCents, 15_000);
-    assert.equal(reserved.reservedCents, 5_000);
-    assert.equal((await db.wallet.findUniqueOrThrow({ where: { userId: buyerUser.id } })).pendingCents, transaction.netPayoutCents);
-    pass('Using an offer creates a private transaction and atomically reserves its $50 bounty');
+    assert.equal(reserved.availableCents, 20_000);
+    assert.equal(reserved.reservedCents, 0);
+    assert.equal((await db.wallet.findUniqueOrThrow({ where: { userId: buyerUser.id } })).pendingCents, 0);
+    pass('Using an offer creates a private transaction without requiring pre-funding');
 
     await replay(seller.context(), beginRequest);
     assert.equal(await db.referralTransaction.count({ where: { listingId: listing.id, referredUserId: sellerUser.id } }), 0);
-    assert.equal((await db.wallet.findUniqueOrThrow({ where: { userId: sellerUser.id } })).reservedCents, 5_000);
+    assert.equal((await db.wallet.findUniqueOrThrow({ where: { userId: sellerUser.id } })).reservedCents, 0);
     pass('Self-referrals are rejected at the server boundary without reserving funds');
 
     await buyer.goto(`/referral/${program.slug}`);
     await actionForm(buyer, 'listingId', listing.id).getByRole('button', { name: /Use (this )?(offer|referral)/i }).click();
     await buyer.locator('form [role="alert"]').waitFor();
     assert.equal(await db.referralTransaction.count({ where: { listingId: listing.id, referredUserId: buyerUser.id } }), 1);
-    assert.equal((await db.wallet.findUniqueOrThrow({ where: { userId: sellerUser.id } })).reservedCents, 5_000);
+    assert.equal((await db.wallet.findUniqueOrThrow({ where: { userId: sellerUser.id } })).reservedCents, 0);
     assert.equal((await db.referralListing.findUniqueOrThrow({ where: { id: listing.id } })).availableSlots, 1);
     pass('Reusing the same offer cannot create a duplicate transaction, reservation, or slot decrement');
 
@@ -325,39 +316,31 @@ async function main() {
     assert.equal(await db.uploadedEvidence.count({ where: { transactionId: transaction.id } }), 1);
     pass('The customer reports completion with private evidence; other users cannot access proof or impersonate the reporter');
 
-    await seller.goto(`/dashboard/transactions/${transaction.id}`);
-    await seller.getByRole('button', { name: 'Confirm completion' }).click();
-    await eventually(() => db.referralTransaction.findUniqueOrThrow({ where: { id: transaction.id } }), value => value.referrerConfirmedAt !== null, 'referrer completion confirmation');
     await admin.goto('/admin?tab=verification');
-    const verificationForm = actionForm(admin, 'transactionId', transaction.id);
+    const verificationForm = actionForm(admin, 'transactionId', transaction.id).filter({has:admin.locator('[name="decision"]')});
     await verificationForm.locator('[name="decision"]').selectOption('approve');
-    await verificationForm.locator('[name="note"]').fill('Fictional demo requirements verified against the submitted smoke evidence.');
-    await verificationForm.getByRole('button', { name: 'Verify referral' }).click();
-    await eventually(() => db.referralTransaction.findUniqueOrThrow({ where: { id: transaction.id } }), value => value.status === 'PAYOUT_PENDING', 'admin referral verification');
-    assert.equal(await db.review.count({ where: { transactionId: transaction.id } }), 0);
-    pass('Referrer confirmation and admin verification precede the payout');
-
-    await admin.goto('/admin?tab=payments');
-    const paymentForm = actionForm(admin, 'transactionId', transaction.id);
-    const payoutRequest = await captureAction(admin, () => paymentForm.getByRole('button', { name: 'Pay demo bounty' }).click());
-    await eventually(() => db.referralTransaction.findUniqueOrThrow({ where: { id: transaction.id } }), value => value.status === 'PAID', 'admin demo bounty payout');
-    const sellerWallet = await db.wallet.findUniqueOrThrow({ where: { userId: sellerUser.id } });
-    const buyerWallet = await db.wallet.findUniqueOrThrow({ where: { userId: buyerUser.id } });
-    assert.equal(sellerWallet.availableCents, 15_000);
-    assert.equal(sellerWallet.reservedCents, 0);
-    assert.equal(sellerWallet.lifetimePayoutsCents, transaction.netPayoutCents);
-    assert.equal(sellerWallet.feesPaidCents, transaction.feeCents);
-    assert.equal(buyerWallet.availableCents, transaction.netPayoutCents);
-    assert.equal(buyerWallet.pendingCents, 0);
-    assert.equal(buyerWallet.lifetimeEarningsCents, transaction.netPayoutCents);
-    const payoutsBefore = await db.payout.count({ where: { transactionId: transaction.id } });
-    const ledgerBefore = await db.walletTransaction.count({ where: { transactionId: transaction.id } });
-    await replay(admin.context(), payoutRequest);
-    await replay(outsider.context(), payoutRequest);
-    assert.equal(await db.payout.count({ where: { transactionId: transaction.id } }), payoutsBefore);
-    assert.equal(await db.walletTransaction.count({ where: { transactionId: transaction.id } }), ledgerBefore);
-    assert.equal((await db.wallet.findUniqueOrThrow({ where: { userId: buyerUser.id } })).availableCents, transaction.netPayoutCents);
-    pass('Demo payout releases the reservation, credits the exact net amount, and cannot be repeated or invoked by a non-admin');
+    await verificationForm.locator('[name="note"]').fill('Fictional requirements verified against private evidence.');
+    await verificationForm.getByRole('button', {name:'Verify referral'}).click();
+    await eventually(()=>db.referralTransaction.findUniqueOrThrow({where:{id:transaction.id}}),value=>value.status==='VERIFIED','evidence verification');
+    const obligation=await db.paymentObligation.findUniqueOrThrow({where:{referralTransactionId:transaction.id}});
+    assert.equal(obligation.status,'CREATED');assert.equal(await db.payout.count({where:{transactionId:transaction.id}}),0);
+    pass('Admin evidence review creates one payment obligation without marking it paid');
+    for(const page of [seller,buyer]){await page.goto('/dashboard/payments');await page.getByRole('button',{name:'Connect demo bank account'}).click();await page.getByText(/fictional bank also serves/).waitFor();}
+    await seller.locator('[name="consent"]').check();await seller.getByRole('button',{name:'Authorize automatic referral payments'}).click();await seller.getByText(/accepted/).waitFor();
+    pass('Demo bank method and explicit simulated payment authorization work in settings');
+    let payoutRequest:Request|undefined;
+    for(const operation of ['debit_success','funds_available','payout_paid']){
+      await admin.goto('/admin?tab=payments');const form=actionForm(admin,'obligationId',obligation.id);
+      await form.locator('[name="operation"]').selectOption(operation);
+      const request=await captureAction(admin,()=>form.getByRole('button',{name:'Record payment action'}).click());
+      if(operation==='payout_paid')payoutRequest=request;
+      await eventually(()=>db.paymentObligation.findUniqueOrThrow({where:{id:obligation.id}}),o=>o.status===({debit_success:'FUNDS_PENDING',funds_available:'FUNDS_AVAILABLE',payout_paid:'PAID'} as Record<string,string>)[operation],operation);
+    }
+    assert.equal((await db.payout.findUniqueOrThrow({where:{transactionId:transaction.id}})).amountCents,5000);
+    const ledgerBefore=await db.ledgerEntry.count({where:{obligationId:obligation.id}});
+    await replay(admin.context(),payoutRequest!);await replay(outsider.context(),payoutRequest!);
+    assert.equal(await db.payout.count({where:{transactionId:transaction.id}}),1);assert.equal(await db.ledgerEntry.count({where:{obligationId:obligation.id}}),ledgerBefore);
+    pass('Simulated debit, settlement and payout deliver exactly $50 once; outsider replay is blocked');
 
     await buyer.goto(`/dashboard/transactions/${transaction.id}`);
     await buyer.locator('[name="rating"]').selectOption('5');
@@ -400,15 +383,56 @@ async function main() {
     await seller.goto('/dashboard');
     await seller.getByText('100%', { exact: true }).waitFor();
     await seller.screenshot({ path: `${artifacts}/referrer-dashboard.png`, fullPage: true });
-    pass('Dashboard balances and referral analytics reflect the completed payout');
+    pass('Dashboard referral analytics reflect the completed payout');
 
-    const mobile = await newPage('mobile', true);
-    await mobile.goto('/marketplace');
-    await mobile.getByRole('heading', { level: 1 }).waitFor();
-    await mobile.waitForLoadState('networkidle');
-    assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1 && document.documentElement.clientWidth <= 391), true, 'The mobile marketplace must fit its 390-pixel viewport without horizontal overflow.');
-    await mobile.screenshot({ path: `${artifacts}/marketplace-mobile.png`, fullPage: true });
-    pass('Desktop and mobile UI screenshots are saved; mobile marketplace has no horizontal overflow');
+    await seller.goto('/dashboard/listings/new');await fillListing(seller,program.id,`https://orbit-money.example.com/ref/request-${run}`,`Request listing ${run}`);await seller.getByRole('button',{name:'Submit for review'}).click();await seller.waitForURL('**/dashboard/listings');
+    const bidListing=await db.referralListing.findFirstOrThrow({where:{referrerId:sellerUser.id,notes:`Request listing ${run}`}});
+    await admin.goto('/admin?tab=listings');const bidApproval=actionForm(admin,'listingId',bidListing.id);await bidApproval.locator('xpath=ancestor::details[1]/summary').click();await bidApproval.locator('[name="status"]').selectOption('ACTIVE');await bidApproval.getByRole('button',{name:'Save status'}).click();await eventually(()=>db.referralListing.findUniqueOrThrow({where:{id:bidListing.id}}),l=>l.status==='ACTIVE','bid listing approval');
+    await outsider.goto('/requests/new');
+    await outsider.locator('[name="programId"]').selectOption(program.id);
+    await outsider.locator('[name="desiredBonus"]').fill('55');
+    await outsider.locator('[name="notes"]').fill(`Smoke request ${run}`);
+    await outsider.getByRole('button',{name:'Request offers'}).click();
+    await outsider.waitForURL(url=>url.pathname.startsWith('/requests/')&&url.pathname!=='/requests/new');
+    const request=await db.referralRequest.findFirstOrThrow({where:{userId:outsiderUser.id,notes:`Smoke request ${run}`}});
+    await seller.goto(`/requests/${request.id}`);
+    await seller.locator('[name="listingId"]').selectOption(bidListing.id);
+    await seller.locator('[name="bonus"]').fill('60');
+    await seller.locator('[name="message"]').fill('I will share $60 after successful verification.');
+    await seller.getByRole('button',{name:'Submit offer'}).click();
+    await seller.getByRole('status').waitFor();
+    await outsider.goto(`/requests/${request.id}`);
+    await outsider.getByRole('button',{name:'Accept offer'}).click();
+    await outsider.waitForURL('**/dashboard/transactions/*');
+    const accepted=await db.referralBid.findFirstOrThrow({where:{requestId:request.id,status:'ACCEPTED'},include:{transaction:true}});
+    assert.equal(accepted.transaction?.bountyCents,6000);assert.equal(accepted.transaction?.netPayoutCents,6000);
+    pass('Request creation, referrer bid and owner acceptance work through the UI and preserve the agreed full bounty');
+    await seller.goto('/dashboard/targeted-offers');
+    await seller.locator('[name="programId"]').selectOption(program.id);
+    await seller.locator('[name="referrerRewardAmount"]').fill('200');
+    await seller.locator('[name="qualificationRequirement"]').fill(`Account-specific fictional demo reward ${run}`);
+    await seller.locator('[name="evidence"]').setInputFiles({name:'targeted-proof.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZb8AAAAASUVORK5CYII=','base64')});
+    await seller.getByRole('button',{name:'Submit targeted offer'}).click();
+    await seller.getByRole('status').waitFor();
+    const targeted=await db.targetedReferralOffer.findFirstOrThrow({where:{userId:sellerUser.id,qualificationRequirement:`Account-specific fictional demo reward ${run}`},include:{evidence:true}});
+    const privateTarget=await outsider.context().request.get(`/api/targeted-evidence/${targeted.evidence[0].id}`);assert.equal(privateTarget.status(),404);
+    await admin.goto('/admin?tab=monitoring');
+    const targetForm=actionForm(admin,'targetedOfferId',targeted.id);await targetForm.locator('[name="note"]').fill('Private fictional proof reviewed; the public reward must remain unchanged.');
+    await targetForm.getByRole('button',{name:'Save targeted review'}).click();
+    await eventually(()=>db.targetedReferralOffer.findUniqueOrThrow({where:{id:targeted.id}}),o=>o.verificationStatus==='VERIFIED','targeted offer review');
+    assert.equal((await db.program.findUniqueOrThrow({where:{id:program.id}})).referrerRewardCents,program.referrerRewardCents);
+    pass('Targeted offer upload and admin review work; stranger download is blocked and public economics remain unchanged');
+    for(const width of [360,390,768,1440]){
+      await seller.setViewportSize({width,height:900});
+      for(const route of ['/','/marketplace','/marketplace?view=table','/referral/orbit-money','/requests',`/requests/${request.id}`,'/for-referrers','/resources','/dashboard','/dashboard/listings','/dashboard/payments','/dashboard/requests','/dashboard/targeted-offers','/dashboard/settings','/dashboard/earnings','/dashboard/messages','/dashboard/notifications','/dashboard/disputes','/dashboard/transactions']){
+        await seller.goto(route);await seller.waitForLoadState('networkidle');
+        const size=await seller.evaluate(()=>({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth}));
+        assert(size.scroll<=size.client+1,`Overflow at ${width}px on ${route}: ${JSON.stringify(size)}`);
+      }
+      await seller.goto('/');await seller.screenshot({path:`${artifacts}/home-${width}.png`,fullPage:true});
+      if(width===390){await seller.goto('/marketplace');await seller.screenshot({path:`${artifacts}/marketplace-mobile.png`,fullPage:true});}
+    }
+    pass('Public and dashboard routes fit mobile, tablet and desktop widths without horizontal overflow');
     assert.deepEqual(browserErrors, [], 'Browser pages should have no JavaScript exceptions or console errors.');
     pass('Browser pages have no fatal JavaScript or console errors');
     writeFileSync(`${artifacts}/smoke-summary.json`, JSON.stringify({ baseURL, run, result: 'passed', checks, screenshots: ['home-desktop.png', 'customer-dashboard.png', 'referrer-dashboard.png', 'marketplace-mobile.png'], demoOnly: true }, null, 2) + '\n');

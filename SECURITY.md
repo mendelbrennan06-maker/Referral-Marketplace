@@ -13,3 +13,11 @@ Evidence is private database storage, with size/type/magic checks and authentica
 Known limitations: no email verification/password recovery, no automated identity checks, no malware scanning or global upload quotas, no real Stripe settlement, and no automated fraud attribution. Financial and evidence operations require further operational review before real money. Rate limits are abuse controls, not proof against distributed attackers. Monitoring and independent security review remain recommended before public production use.
 
 Never include secrets in issues, commits, logs, or screenshots. Report suspected vulnerabilities privately to the repository owner. Review current dependencies, deployment variables, backups, and restrictive program permissions before launch.
+
+## Payment, monitoring, and bid boundaries
+
+Provider webhooks fail closed without a real authenticated adapter. Demo events originate from protected admin controls; manual events require external receipts. Raw bank/card/routing data is never stored. Current owned consent gates collection. Balanced immutable ledgers, audit records, unique operation/event keys, and serializable transactions guard duplicate financial operations.
+
+Targeted proof is private to its owner/admin. Expiry is enforced at marketplace and acceptance boundaries. Monitor fetches require approved public HTTPS sources, reject private DNS/redirects/authentication/bot challenges, and obey robots rules. Low-confidence observations do not rewrite verified public data.
+
+Requests use session-derived ownership. Bids require the referrer’s active approved listing for the same eligible program. Atomic acceptance and a partial unique accepted-bid index enforce a single winner under contention. Accepted bounty/fee snapshots never use client calculations. Suspended users cannot act. Public notes/messages must not contain account identifiers.

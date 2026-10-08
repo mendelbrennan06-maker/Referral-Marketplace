@@ -7,12 +7,15 @@ import type { ReactNode } from "react";
 import { site } from "@/lib/config";
 
 const links = [
+  { href: "/dashboard/requests", label: "Requests & bids", icon: Handshake },
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+  { href: "/dashboard/targeted-offers", label: "Targeted offers", icon: List },
   { href: "/dashboard/listings", label: "My listings", icon: List },
   { href: "/dashboard/transactions?role=referrer", label: "People using my referrals", icon: Users },
   { href: "/dashboard/transactions?role=referred", label: "Referrals I’m using", icon: Handshake },
   { href: "/dashboard/earnings", label: "Earnings", icon: ChartNoAxesCombined },
-  { href: "/dashboard/wallet", label: "Wallet", icon: Wallet },
+  { href: "/dashboard/payments", label: "Payments", icon: CreditCard },
+  { href: "/dashboard/wallet", label: "Legacy wallet", icon: Wallet },
   { href: "/dashboard/transactions", label: "Transactions", icon: CreditCard },
   { href: "/dashboard/messages", label: "Messages", icon: MessageSquare },
   { href: "/dashboard/disputes", label: "Disputes", icon: CircleHelp },

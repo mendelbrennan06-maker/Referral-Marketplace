@@ -29,8 +29,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run db:generate && npm run db:migrate && npm run db:seed
-      - run: npm run typecheck && npm run lint && npm test && npm run build
+      - run: npm run db:generate && npm run db:migrate && npm run db:seed && npm run catalog:prepare
+      - run: npm run typecheck && npm run lint && npm test && npm run test:integration && npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run start > /tmp/refermarket.log 2>&1 &
       - run: npm run test:e2e

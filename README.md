@@ -29,7 +29,7 @@ The local setup helper creates an ignored, private `.env` with randomly generate
 
 Demo seed account emails include `demo-admin@refermarket.example`, `demo-customer@refermarket.example`, and `demo-clara@refermarket.example`. Their password is the locally generated `DEMO_PASSWORD` in your private `.env`; it is not committed or publicly distributed. A real administrator is created with `ADMIN_EMAIL` and `ADMIN_PASSWORD` supplied securely to `npm run admin:create`.
 
-Set `PAYMENT_MODE=demo` to exercise funding, reservations, payouts, and withdrawals with simulated money. The interface labels this mode. These are real database operations and audit trails, but no money moves through a bank or payment provider. Do not switch a funded demo database to real payments; use a separate production database and an explicit migration/reconciliation plan.
+Set `PAYMENT_PROVIDER=demo` to exercise post-verification collection, settlement, and full-bounty payouts with simulated money. Legacy wallets retain historical reservations and withdrawals. The interface labels this mode. These are real database operations and audit trails, but no money moves through a bank or payment provider. Do not switch a funded demo database to real payments; use a separate production database and an explicit migration/reconciliation plan.
 
 Known brand programs are seeded with unverified restrictions and disabled marketplace actions. Fictional example programs permit demo flows. Example bonuses, reviews, users, offer statistics, and analytics are marked as demo information; they do not establish current company benefits, endorsement, or program permission. Fictional referral destinations are example domains and do not provide real signup benefits.
 
@@ -46,7 +46,7 @@ Users can message counterparties and open disputes. Reviews require a paid trans
 
 ## Ranking and fees
 
-Best-value ranking combines capped/log-scaled bounty (30%), payout reliability (30%), completion history (15%), ratings (10%), and funded status (15%). Missing history counts as zero. A high bounty alone does not guarantee top placement. Admin-editable fees support a percentage, fixed amount, minimum, and maximum, capped at the offered bounty. Each transaction retains its fee/bounty snapshot so subsequent settings edits cannot change existing terms.
+Best-value ranking combines capped/log-scaled bounty (30%), payout reliability (30%), completion history (15%), ratings (10%), and funded status (15%). Missing history counts as zero. A high bounty alone does not guarantee top placement. Admin-editable fees support a percentage, fixed amount, minimum, and maximum. Fees are added to the referrer payment and never deducted from new customer bounties. Each transaction retains its fee/bounty snapshot so subsequent settings edits cannot change existing terms.
 
 ## Environment variables
 
@@ -79,8 +79,18 @@ The browser smoke test runs against the configured local origin after health rea
 
 ## Railway and GitHub
 
-See [DEPLOYMENT.md](DEPLOYMENT.md). `railway.json` builds the Dockerfile, applies migrations in a guarded pre-deploy step, starts Next.js on Railway's injected port, and checks `/api/health`. Ordinary startup and redeployment do not seed data. The GitHub CI workflow checks types, lint, business rules, build, and browser smoke against PostgreSQL.
+See [DEPLOYMENT.md](DEPLOYMENT.md). The Railway web service uses the Dockerfile, applies migrations in a guarded pre-deploy step, starts Next.js on Railway's injected port, and checks `/api/health`. Reference service settings are preserved under `deploy/`. Ordinary startup and redeployment do not seed data. The GitHub CI workflow checks types, lint, business rules, build, and browser smoke against PostgreSQL.
 
 ## MVP limits
 
-Manual referral verification; no automated attribution or company partnerships. No email delivery, password reset, social login, identity/phone verification, or live payment processing is claimed. Stripe integration is test architecture requiring credentials and further reconciliation/payout implementation before real money. In-app notifications and messaging work without an email provider. Uploaded evidence has a per-file cap; production needs total account quotas, scanning, retention rules, monitoring, backups, and load testing. Read [SECURITY.md](SECURITY.md) and [PRODUCT_NOTES.md](PRODUCT_NOTES.md).
+Manual referral verification; no automated attribution or company partnerships. No email delivery, password reset, social login, identity/phone verification, or live payment processing is claimed. The standard payment flow supports demo simulation and manual external settlement records. Live payment collection and bank payouts are not enabled; the legacy Stripe architecture is isolated and its public endpoints fail closed. In-app notifications and messaging work without an email provider. Uploaded evidence has a per-file cap; production needs total account quotas, scanning, retention rules, monitoring, backups, and load testing. Read [SECURITY.md](SECURITY.md) and [PRODUCT_NOTES.md](PRODUCT_NOTES.md).
+
+## Continued project update
+
+The existing application now includes post-verification demo/manual payments, multi-level completion review, daily program monitoring with immutable offer/terms history, private targeted offers, and request/bid competition. The bright marketplace UI separates company signup benefits from referrer cash. Browse supports card and desktop comparison views with mobile cards; account tables adapt for narrow screens.
+
+New routes: `/requests`, `/requests/new`, `/requests/[id]`, `/dashboard/requests`, `/dashboard/payments`, `/dashboard/targeted-offers`, `/for-referrers`, `/resources`, and `/admin?tab=monitoring`. Existing routes and historical wallet transactions remain available.
+
+The standard payment model is: the customer gets the full bounty, and the referrer pays the fee separately. No pre-funding is required. See [PAYMENTS.md](PAYMENTS.md), [MONITORING.md](MONITORING.md), [TARGETED_OFFERS.md](TARGETED_OFFERS.md), and [PROGRAM_CATALOG.md](PROGRAM_CATALOG.md).
+
+Local validation: `npm run db:migrate && npm run db:seed && npm run catalog:prepare`, then `npm run typecheck && npm run lint && npm test && npm run test:integration && npm run build`. Start the app and run `npm run test:e2e`. Integration/browser fixtures require an isolated loopback database and demo credentials. CI runs these checks with a dedicated PostgreSQL service.

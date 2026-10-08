@@ -1,3 +1,4 @@
+import { targetedOfferValid } from "@/lib/monitoring/policy";
 import { Prisma } from '@prisma/client';
 import { currentUser } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -11,10 +12,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tra
   try {
     await rateLimit('tracked-link', user.id, 50, 60 * 60_000);
     const target = await db.$transaction(async tx => {
-      const transaction = await tx.referralTransaction.findUnique({ where: { id: transactionId }, include: { listing: { include: { referrer: true } }, program: true } });
+      const transaction = await tx.referralTransaction.findUnique({ where: { id: transactionId }, include: { listing: { include: { referrer: true,targetedOffer:true } }, program: true } });
       if (!transaction || transaction.referredUserId !== user.id) throw new Error('Referral transaction not found.');
       if (['REJECTED', 'CANCELLED', 'DISPUTED'].includes(transaction.status)) throw new Error('This referral link is unavailable while the transaction is closed or disputed.');
       if (!canUseProgram(transaction.program) || transaction.listing.status !== 'ACTIVE' || transaction.listing.referrer.isSuspended) throw new Error('This referral program or listing is currently restricted.');
+      if(transaction.listing.targetedOffer&&!targetedOfferValid(transaction.listing.targetedOffer))throw new Error('Targeted offer verification has expired.');
       const approved = transaction.listing.approvedReferralUrl;
       const url = approved && safeReferralUrl(approved, transaction.program.officialDomain);
       if (!url) throw new Error('This referral URL has not been approved.');

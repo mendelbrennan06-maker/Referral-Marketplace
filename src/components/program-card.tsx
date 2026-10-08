@@ -1,10 +1,5 @@
-import Link from "next/link";
-import { ArrowUpRight, ShieldCheck } from "lucide-react";
-import { Money, ProgramMark } from "@/components/ui";
-
-export type ProgramCardData = { name: string; slug: string; isDemo: boolean; restrictionStatus: string; category: { name: string }; listings: { bountyCents: number; isFunded: boolean }[] };
-export function ProgramCard({ program }: { program: ProgramCardData }) {
-  const highestBounty = program.listings.reduce((highest, offer) => Math.max(highest, offer.bountyCents), 0);
-  const funded = program.listings.some(offer => offer.isFunded);
-  return <article className="program-card"><Link href={`/referral/${program.slug}`} className="program-card-main"><div className="program-card-top"><ProgramMark name={program.name} slug={program.slug} />{program.isDemo && <span className="badge badge-demo">Demo data</span>}</div><h3>{program.name}</h3><p>{program.category.name}</p><div className="program-card-value">{highestBounty ? <><Money cents={highestBounty} /><small>highest gross bounty</small></> : <><span style={{ fontSize: 19, letterSpacing: "-.02em" }}>Explore program</span><small>terms review pending</small></>}</div></Link><Link href={`/referral/${program.slug}`} className="program-card-footer"><span>{program.listings.length ? `${program.listings.length} active ${program.listings.length === 1 ? "offer" : "offers"}` : "Bounties unavailable"}{funded && <ShieldCheck size={12} />}</span><ArrowUpRight size={15} /></Link></article>;
-}
+import Link from 'next/link';
+import { ArrowUpRight } from 'lucide-react';
+import { Money,ProgramMark } from '@/components/ui';
+export type ProgramCardData={name:string;slug:string;isDemo:boolean;restrictionStatus:string;officialBenefit?:string;category:{name:string};listings:{bountyCents:number;isFunded:boolean}[]};
+export function ProgramCard({program}:{program:ProgramCardData}){const highest=program.listings.reduce((max,l)=>Math.max(max,l.bountyCents),0);return <article className="program-card"><Link href={`/referral/${program.slug}`} className="program-card-main"><div className="program-card-top"><ProgramMark name={program.name} slug={program.slug}/>{program.isDemo&&<span className="badge badge-demo">Demo data</span>}</div><h3>{program.name}</h3><p>{program.category.name}</p><div className="signup-benefit"><span className="label">Company signup offer</span><strong>{program.officialBenefit||'Check official terms'}</strong></div><div className="program-card-value">{highest?<><Money cents={highest}/><small>up to · extra cash from referrers</small></>:<><span className="unavailable-value">Offers pending review</span><small>Company terms need verification</small></>}</div></Link><Link href={`/referral/${program.slug}`} className="program-card-footer"><span>{program.listings.length?`${program.listings.length} referrer ${program.listings.length===1?'offer':'offers'}`:'Explore program'}</span><span>View offers <ArrowUpRight size={15}/></span></Link></article>;}
