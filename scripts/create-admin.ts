@@ -7,7 +7,7 @@ async function main() {
   const email = z.email().parse(process.env.ADMIN_EMAIL?.trim().toLowerCase());
   const password = z.string().min(12).max(72).parse(process.env.ADMIN_PASSWORD);
   if (Buffer.byteLength(password, 'utf8') > 72) throw new Error('Administrator password must fit within 72 UTF-8 bytes.');
-  if (!['demo', 'stripe'].includes(process.env.PAYMENT_MODE || '')) throw new Error('Set PAYMENT_MODE to demo or stripe explicitly before account creation.');
+  if (!['demo', 'manual'].includes(process.env.PAYMENT_MODE || 'manual')) throw new Error('Only manual or explicit demo mode is supported.');
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
     if (existing.role !== 'ADMIN') throw new Error('This email belongs to a regular user. Refusing to elevate privileges implicitly.');
@@ -17,7 +17,7 @@ async function main() {
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.$transaction(async tx => {
     const admin = await tx.user.create({ data: {
-      email, passwordHash, role: 'ADMIN',
+      email, passwordHash, role: 'ADMIN', emailVerified: true, emailVerifiedAt: new Date(),
       profile: { create: { username: `admin-${Date.now().toString(36)}`, displayName: 'Administrator' } },
       wallet: { create: { isDemo: process.env.PAYMENT_MODE === 'demo' } },
     } });

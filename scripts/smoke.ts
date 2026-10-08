@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { issueAccountToken } from '../src/lib/accounts';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { config } from 'dotenv';
@@ -67,6 +68,10 @@ function observe(context: BrowserContext) {
 
 async function signup(page: Page, role: string) {
   await page.goto('/register');
+  await page.locator('[name="firstName"]').fill('Smoke');
+  await page.locator('[name="lastName"]').fill(role);
+  await page.locator('[name="confirmPassword"]').fill(password);
+  await page.locator('[name="terms"]').check();
   await page.locator('[name="name"]').fill(`Smoke ${role}`);
   await page.locator('[name="username"]').fill(username(role));
   await page.locator('[name="email"]').fill(email(role));
@@ -78,6 +83,12 @@ async function signup(page: Page, role: string) {
   ]);
   const user = await db.user.findUniqueOrThrow({ where: { email: email(role) }, include: { wallet: true, profile: true } });
   assert.equal(user.role, 'USER');
+  assert.equal(user.emailVerified,false);
+  const verifyToken=await issueAccountToken(user.id,'VERIFY_EMAIL');
+  await page.goto(`/verify-email?token=${verifyToken}`);
+  await page.getByRole('button',{name:'Verify email',exact:true}).click();
+  await page.getByText('Your email is verified.',{exact:false}).waitFor();
+  await page.goto('/dashboard');
   assert(user.wallet && user.profile, 'Signup should create the profile and wallet together.');
   return user;
 }
@@ -332,7 +343,7 @@ async function main() {
     assert.equal(obligation.status,'CREATED');assert.equal(await db.payout.count({where:{transactionId:transaction.id}}),0);
     pass('Admin evidence review creates one payment obligation without marking it paid');
     for(const page of [seller,buyer]){await page.goto('/dashboard/payments');await page.getByRole('button',{name:'Connect demo bank account'}).click();await page.getByText(/fictional bank also serves/).waitFor();}
-    await seller.locator('[name="consent"]').check();await seller.getByRole('button',{name:'Authorize automatic referral payments'}).click();await seller.getByText(/accepted/).waitFor();
+    await seller.locator('[name="consent"]').check();await seller.getByRole('button',{name:'Authorize demo referral payments'}).click();await seller.getByText(/accepted/).waitFor();
     pass('Demo bank method and explicit simulated payment authorization work in settings');
     let payoutRequest:Request|undefined;
     for(const operation of ['debit_success','funds_available','payout_paid']){

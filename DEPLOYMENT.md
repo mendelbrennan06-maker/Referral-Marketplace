@@ -1,3 +1,5 @@
+> **Production marketplace update:** [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) is authoritative for launch configuration. Production defaults to manual settlement, hides demo records, disables simulation/seeding, and uses a daily 06:00 UTC worker. Older demo walkthroughs below are local testing only.
+
 # Railway deployment
 
 Deployment architecture: one GitHub-backed Next.js app service and one Railway PostgreSQL service. `main` is the production branch. No Vercel service is required.
@@ -16,7 +18,7 @@ The GitHub app must be installed with access to the selected repository. If nece
 
 ## App service variables
 
-Use Railway's variable reference for PostgreSQL: `DATABASE_URL=${{Postgres.DATABASE_URL}}` (replace `Postgres` with the actual database service name). Generate a strong `AUTH_SECRET`. Set the real public HTTPS origin in `APP_URL`. Set `PAYMENT_MODE=demo` for this demo MVP and `DEMO_SEED=false` by default. `NEXT_PUBLIC_SITE_NAME=ReferMarket` is optional.
+Use Railway's variable reference for PostgreSQL: `DATABASE_URL=${{Postgres.DATABASE_URL}}` (replace `Postgres` with the actual database service name). Generate a strong `AUTH_SECRET`. Set the real public HTTPS origin in `APP_URL`. Set `APP_ENV=production`, `PAYMENT_MODE=manual`, `PAYMENT_PROVIDER=manual`, `DEMO_SEED=false`, `DEMO_BOOTSTRAP_ONCE=false` and `MONITOR_ALLOW_SIMULATION=false`. `NEXT_PUBLIC_SITE_NAME=ReferMarket` is optional.
 
 For an intentionally public demo, create secure `DEMO_PASSWORD`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`, and set `DEMO_BOOTSTRAP_ONCE=true` plus `DEMO_SEED=true` for the first deployment only. The guarded pre-deploy helper initializes example data and the owner administrator, then records `DEMO_BOOTSTRAP_COMPLETED`. Repeated execution sees that audit marker and preserves all existing data. Immediately set both boolean flags back to `false` after successful initialization. Do not publish demo passwords publicly or reuse a real person's password. Alternatively run the explicit seed/admin commands through an authorized remote job.
 
@@ -42,11 +44,11 @@ Live payments require a separate funded database, an approved provider and fully
 
 ## Post-verification and monitoring release
 
-Use `PAYMENT_PROVIDER=demo` (or explicit manual record mode). Live-money adapters are disabled. Preserve existing secrets and database; pre-deploy applies additive migrations and guarded catalog preparation without resetting existing data. Existing transactions are backfilled as LEGACY_WALLET, retaining their original financial snapshots.
+Use `PAYMENT_PROVIDER=manual` and `PAYMENT_MODE=manual` in production. Live-money adapters are disabled. Preserve existing secrets and database; pre-deploy applies additive migrations and guarded catalog preparation without resetting existing data. Existing transactions are backfilled as LEGACY_WALLET, retaining their original financial snapshots.
 
-The separate GitHub-backed `program-monitor` service uses its Railway service configuration, runs hourly (`0 * * * *`, UTC), and exits after `npm run monitor:daily`. It selects programs due by their default 24-hour cadence. Configure `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PAYMENT_PROVIDER=demo`, concurrency/delay/retry settings, and no HTTP healthcheck or web start command. The web service retains its migration pre-deploy command and `/api/health`. Legacy config files are retained under `deploy/` as references because Railway now rejects their config-file selector. Deploy web/migrations first, then enable the scheduled worker. Inspect MonitoringRun and Railway logs to verify actual dispatch.
+The separate GitHub-backed `program-monitor` service uses its Railway service configuration, runs daily (`0 6 * * *`, UTC), and exits after `npm run monitor:daily`. It selects programs due by their default 24-hour cadence. Configure `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `APP_ENV=production`, `PAYMENT_PROVIDER=manual`, `MONITOR_ALLOW_SIMULATION=false`, concurrency/delay/retry settings, and no HTTP healthcheck or web start command. The web service retains its migration pre-deploy command and `/api/health`. Legacy config files are retained under `deploy/` as references because Railway now rejects their config-file selector. Deploy web/migrations first, then enable the scheduled worker. Inspect MonitoringRun and Railway logs to verify actual dispatch.
 
-Schema migrations never reset production. Existing append-only histories prevent erasure. Review migrations and establish backups before real-money use. Validate existing users, listings and history after deployment. Scheduled demo sources remain simulated; ordinary official HTML often needs manual review rather than automatic verified amounts.
+Schema migrations never reset production. Existing append-only histories prevent erasure. Review migrations and establish backups before real-money use. Validate existing users, listings and history after deployment. Scheduled production sources never use simulation; ordinary official HTML often needs manual review rather than automatic verified amounts.
 
 `node --import tsx scripts/verify-deployment.ts` optionally checks authenticated deployed routes when `VERIFY_DEPLOYMENT=true`. Supply `VERIFY_ADMIN_EMAIL` and `VERIFY_ADMIN_PASSWORD` as Railway reference variables; it never prints credentials or response bodies. Clear these verification variables after the rollout.
 

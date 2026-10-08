@@ -1,3 +1,4 @@
+import { publicData } from '@/lib/environment';
 import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { ArrowUpRight, BadgeCheck, Star } from "lucide-react";
@@ -8,14 +9,14 @@ import { Money } from "@/components/ui";
 export const publicReferrerSelect = {
   id: true, isSuspended:true, isDemo: true, createdAt: true, failedPaymentCount:true,successfulPaymentCount:true,trustTier:true,
   profile: { select: { username: true, displayName: true, identityVerified: true } },
-  referralsOffered: { select: { status: true, createdAt: true, completedAt: true } },
-  receivedReviews: { select: { rating: true } },
+  referralsOffered: { where:publicData(),select: { status: true, createdAt: true, completedAt: true } },
+  receivedReviews: { where:publicData(),select: { rating: true } },
 } satisfies Prisma.UserSelect;
 export type PublicReferrer = Prisma.UserGetPayload<{ select: typeof publicReferrerSelect }>;
 export function referrerStats(referrer: PublicReferrer) {
   const completed = referrer.referralsOffered.filter(t => t.status === "PAID");
   const final = referrer.referralsOffered.filter(t => ["PAID", "REJECTED", "CANCELLED", "DISPUTED"].includes(t.status));
-  const reliability = referrer.failedPaymentCount ? Math.round(referrer.successfulPaymentCount / (referrer.successfulPaymentCount + referrer.failedPaymentCount)*100) : final.length ? Math.round(completed.length / final.length * 100) : null;
+  const reliability = final.length ? Math.round(completed.length / final.length * 100) : null;
   const rating = referrer.receivedReviews.length ? referrer.receivedReviews.reduce((total, review) => total + review.rating, 0) / referrer.receivedReviews.length : null;
   const timed = completed.filter(t => t.completedAt);
   const payoutDays = timed.length ? timed.reduce((total, t) => total + (t.completedAt!.getTime() - t.createdAt.getTime()) / 86400000, 0) / timed.length : null;

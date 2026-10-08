@@ -1,9 +1,10 @@
+import { assertMarketplaceAccount,activeAccount } from './environment';
 import { paymentTransaction,paymentAudit } from './payment-service';
 import { canUseProgram } from './marketplace';
 import { listingRewardSource } from './targeted-offers';
 import { acceptListing } from './referral-service';
 import type { Prisma } from '@prisma/client';
-async function activeUser(tx:Prisma.TransactionClient,id:string){const u=await tx.user.findUnique({where:{id}});if(!u||u.isSuspended)throw new Error('Account unavailable.');return u;}
+async function activeUser(tx:Prisma.TransactionClient,id:string){const u=await tx.user.findUnique({where:{id}});if(!u)throw new Error('Account unavailable.');assertMarketplaceAccount(u);return u;}
 export async function createRequest(userId:string,programId:string,desiredBountyCents:number,notes:string,expiresAt:Date){
  if(!Number.isSafeInteger(desiredBountyCents)||desiredBountyCents<100||desiredBountyCents>100000000)throw new Error('Choose a bonus between $1 and $1,000,000.');
  if(!Number.isFinite(expiresAt.getTime())||expiresAt<=new Date()||expiresAt.getTime()>Date.now()+90*86400000)throw new Error('Choose an expiration within the next 90 days.');
@@ -13,7 +14,7 @@ export async function createRequest(userId:string,programId:string,desiredBounty
 export async function submitBid(userId:string,requestId:string,listingId:string,bountyCents:number,message:string){
  return paymentTransaction(async tx=>{
   await activeUser(tx,userId);const r=await tx.referralRequest.findUnique({where:{id:requestId},include:{program:true,user:true}});
-  if(!r||r.status!=='OPEN'||r.expiresAt<=new Date()||r.user.isSuspended||!canUseProgram(r.program))throw new Error('This request is closed or unavailable.');
+  if(!r||r.status!=='OPEN'||r.expiresAt<=new Date()||!activeAccount(r.user)||!canUseProgram(r.program))throw new Error('This request is closed or unavailable.');
   if(r.userId===userId)throw new Error('You cannot bid on your own request.');
   const l=await tx.referralListing.findUnique({where:{id:listingId}});
   if(!l||l.referrerId!==userId||l.programId!==r.programId||l.status!=='ACTIVE'||l.offerType!=='STANDARD'||!l.approvedReferralUrl||l.availableSlots<1||(l.expiresAt&&l.expiresAt<=new Date()))throw new Error('Choose your active approved listing for this program.');

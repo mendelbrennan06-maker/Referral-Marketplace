@@ -10,7 +10,7 @@ if (!existsSync(".env")) {
     `POSTGRES_USER="refermarket"`, `POSTGRES_DB="refermarket"`,
     `POSTGRES_PASSWORD="${password}"`,
     `AUTH_SECRET="${randomBytes(48).toString("hex")}"`,
-    `APP_URL="http://localhost:3000"`, `PAYMENT_MODE="demo"`,
+    `APP_URL="http://localhost:3000"`, `APP_ENV="demo"`, `MONITOR_ALLOW_SIMULATION="true"`, `PAYMENT_MODE="demo"`,
     `NEXT_PUBLIC_SITE_NAME="ReferMarket"`, `DEMO_SEED="true"`,
     `DEMO_PASSWORD="${randomBytes(18).toString("base64url")}"`
   ];

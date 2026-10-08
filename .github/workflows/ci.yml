@@ -19,6 +19,8 @@ jobs:
       DATABASE_URL: postgresql://refermarket:ci-only-password@127.0.0.1:5432/refermarket?schema=public
       AUTH_SECRET: ci-only-authentication-key-not-used-in-production
       APP_URL: http://localhost:3000
+      APP_ENV: demo
+      MONITOR_ALLOW_SIMULATION: 'true'
       PAYMENT_MODE: demo
       DEMO_SEED: 'true'
       DEMO_PASSWORD: ci-only-demo-password
@@ -41,3 +43,4 @@ jobs:
           fi
       - run: npm run start > /tmp/refermarket.log 2>&1 &
       - run: npm run test:e2e
+      - run: npm run test:e2e:production

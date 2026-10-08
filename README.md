@@ -1,3 +1,5 @@
+> **Production marketplace update:** [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) is authoritative for launch configuration. Production defaults to manual settlement, hides demo records, disables simulation/seeding, and uses a daily 06:00 UTC worker. Older demo walkthroughs below are local testing only.
+
 # ReferMarket
 
 A two-sided referral marketplace: referrers offer part of a referral reward, customers compare offers, and the marketplace charges a configurable success fee. The brand lives in `src/lib/config.ts` and `NEXT_PUBLIC_SITE_NAME`.

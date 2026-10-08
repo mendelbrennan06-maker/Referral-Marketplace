@@ -10,6 +10,7 @@ import { EmptyState, Field, Money, PageHeading } from "@/components/ui";
 export default async function WalletPage() {
   const user = await requireUser();
   const demo = isDemoMode();
+  if(!demo)return <div className="stack"><PageHeading eyebrow="MANUAL SETTLEMENT" title="Wallet unavailable" description="Referral Market does not hold a cash balance or transfer money. Historical demo balances are retained privately for audit only."/><Link href="/dashboard/payments" className="button button-secondary">View manual settlement records</Link></div>;
   const [wallet, ledger] = await Promise.all([
     db.wallet.findUnique({ where: { userId: user.id } }),
     db.walletTransaction.findMany({ where: { wallet: { userId: user.id } }, orderBy: { createdAt: "desc" }, take: 100 }),

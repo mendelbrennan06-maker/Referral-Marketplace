@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { config } from 'dotenv';
+import { chromium } from 'playwright';
+import { db } from '../src/lib/db';
+import { issueAccountToken } from '../src/lib/accounts';
+async function main(){
+config({quiet:true});
+assert(['localhost','127.0.0.1'].includes(new URL(process.env.DATABASE_URL!).hostname),'Production smoke may mutate only the isolated loopback DB.');
+const base='http://localhost:3001';
+const server=spawn('node',['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port','3001'],{env:{...process.env,APP_ENV:'production',PAYMENT_MODE:'manual',PAYMENT_PROVIDER:'manual',APP_URL:base,MONITOR_ALLOW_SIMULATION:'false',EMAIL_PROVIDER:'',TURNSTILE_SECRET_KEY:'',NEXT_PUBLIC_TURNSTILE_SITE_KEY:''},stdio:'ignore'});
+const checks:string[]=[];const errors:string[]=[];
+const pass=(message:string)=>{checks.push(message);console.info('PASS '+message);};
+const tag=randomBytes(6).toString('hex'),email=`production-browser-${tag}@example.com`,password='A secure browser test passphrase!';
+let browser:Awaited<ReturnType<typeof chromium.launch>>|undefined;
+try{
+ for(let i=0;i<60;i++){try{if((await fetch(base+'/api/health')).ok)break;}catch{}await new Promise(r=>setTimeout(r,500));if(i===59)throw new Error('Production test server unavailable.');}
+ browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "/usr/bin/chromium"});
+ const context=await browser.newContext({baseURL:base});const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+ for(const width of [360,390,768,1440]){await page.setViewportSize({width,height:1000});for(const route of ['/','/marketplace','/requests','/register','/login','/forgot-password','/verify-email','/reset-password','/terms','/privacy','/community-guidelines','/referral-disclosure']){
+  const r=await page.goto(route);assert.equal(r?.status(),200,route);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),`Overflow ${route} at ${width}`);
+ }}pass('48 production public route/width checks pass');
+ await page.goto('/');assert.equal(await page.getByText('Demo payments',{exact:true}).count(),0);assert.equal(await page.getByText('Atlas Rewards',{exact:true}).count(),0);await page.getByText('No active offers yet.',{exact:true}).waitFor();await page.goto('/referral/orbit-money');await page.getByRole('heading',{name:'A little off track.'}).waitFor();await page.goto('/profile/demo-alex');await page.getByRole('heading',{name:'A little off track.'}).waitFor();pass('Demo data is hidden and genuine production empty states work');
+ await page.goto('/dashboard');await page.waitForURL('**/login');assert(new URL(page.url()).pathname==='/login');pass('Dashboard requires login');
+ await page.goto('/register');await page.locator('[name=firstName]').fill('Private');await page.locator('[name=lastName]').fill('LegalName');await page.locator('[name=name]').fill('Public Browser Member');await page.locator('[name=username]').fill(`browser_${tag}`);await page.locator('[name=email]').fill(email.toUpperCase());await page.locator('[name=password]').fill(password);await page.locator('[name=confirmPassword]').fill(password);await page.locator('[name=terms]').check();await page.getByRole('button',{name:'Create account',exact:true}).click();await page.waitForURL('**/dashboard');
+ const user=await db.user.findUniqueOrThrow({where:{email}});assert.equal(user.isDemo,false);assert(user.termsAcceptedAt);assert.equal(user.emailVerified,false);pass('Production UI registration normalizes email, stores terms and creates a real account');
+ await page.goto('/dashboard/settings');await page.getByText('Email delivery is not configured.',{exact:false}).waitFor();await page.getByRole('button',{name:'Resend verification email'}).click();await page.getByRole('alert').filter({hasText:'not configured'}).waitFor();pass('Unconfigured email is honestly reported; resend does not pretend delivery');
+ await page.goto('/profile/'+`browser_${tag}`);assert.equal((await page.locator('body').innerText()).includes(email),false);assert.equal((await page.locator('body').innerText()).includes('LegalName'),false);pass('Public profile excludes email and private legal name');
+ const verify=await issueAccountToken(user.id,'VERIFY_EMAIL');await page.goto('/verify-email?token='+verify);await page.getByRole('button',{name:'Verify email',exact:true}).click();await page.getByRole('status').filter({hasText:'Your email is verified.'}).waitFor();await page.getByRole('button',{name:'Verify email',exact:true}).click();await page.getByRole('alert').filter({hasText:'invalid or expired'}).waitFor();pass('Verification UI consumes a single-use token');
+ const second=await browser.newContext({baseURL:base});const secondPage=await second.newPage();await secondPage.goto('/login');await secondPage.locator('[name=email]').fill(email);await secondPage.locator('[name=password]').fill(password);await secondPage.locator('[name=remember]').check();await secondPage.getByRole('button',{name:'Log in',exact:true}).click();await secondPage.waitForURL('**/dashboard');
+ await page.goto('/dashboard/settings');await page.getByText(/^Other session ·/).waitFor();await page.getByRole('button',{name:'Log out all other sessions'}).click();await page.getByRole('status').filter({hasText:'Other sessions signed out.'}).waitFor();await secondPage.goto('/dashboard');await secondPage.waitForURL('**/login');pass('Remember-me login and revocation of other sessions work');
+ await page.goto('/forgot-password');await page.locator('[name=email]').fill(email);await page.getByRole('button',{name:'Request reset link'}).click();await page.getByRole('status').filter({hasText:'If an eligible account exists'}).waitFor();pass('Forgot-password UI returns generic confirmation without fabricated delivery');
+ const reset=await issueAccountToken(user.id,'RESET_PASSWORD');await page.goto('/reset-password?token='+reset);await page.locator('[name=password]').fill('Another secure browser test passphrase!');await page.locator('[name=confirmPassword]').fill('Another secure browser test passphrase!');await page.getByRole('button',{name:'Reset password',exact:true}).click();await page.getByRole('status').filter({hasText:'all sessions were signed out'}).waitFor();assert.equal(await db.session.count({where:{userId:user.id}}),0);await page.goto('/dashboard');await page.waitForURL('**/login');pass('Password reset UI revokes all server sessions');
+ await page.goto('/login');await page.locator('[name=email]').fill(email);await page.locator('[name=password]').fill(password);await page.getByRole('button',{name:'Log in',exact:true}).click();await page.getByRole('alert').filter({hasText:'Invalid email or password.'}).waitFor();pass('Old password rejected with generic login error');
+ await page.locator('[name=email]').fill(email);await page.locator('[name=password]').fill('Another secure browser test passphrase!');await page.getByRole('button',{name:'Log in',exact:true}).click();await page.waitForURL('**/dashboard');await page.goto('/dashboard/wallet');await page.getByText('Wallet unavailable',{exact:true}).waitFor();assert.equal(await page.getByText('Available balance',{exact:true}).count(),0);pass('Production hides fake wallet balances');
+ await page.goto('/dashboard');await page.getByRole('button',{name:'Log out',exact:true}).click();await page.waitForURL(base+'/');assert.equal(await db.session.count({where:{userId:user.id}}),0);await page.goto('/dashboard');await page.waitForURL('**/login');pass('Logout invalidates the server session');
+ await page.locator('[name=email]').fill(email);await page.locator('[name=password]').fill('Another secure browser test passphrase!');await page.getByRole('button',{name:'Log in',exact:true}).click();await page.waitForURL('**/dashboard');
+ await db.user.update({where:{id:user.id},data:{accountStatus:'SUSPENDED',isSuspended:true}});await page.goto('/dashboard');await page.waitForURL('**/login');pass('Suspended account sessions cannot access dashboard');
+ await db.user.update({where:{id:user.id},data:{accountStatus:'ACTIVE',isSuspended:false}});
+ await page.goto('/dashboard/settings');const closure=page.locator('form:has(input[name=confirmation])');await closure.locator('[name=password]').fill('Another secure browser test passphrase!');await closure.locator('[name=confirmation]').fill('CLOSE');await closure.getByRole('button',{name:'Request account closure'}).click();await page.waitForURL('**/login?closed=1');await page.getByRole('status').filter({hasText:'Your account is closed.'}).waitFor();assert.equal((await db.user.findUniqueOrThrow({where:{id:user.id}})).accountStatus,'CLOSED');assert.equal(await db.session.count({where:{userId:user.id}}),0);pass('Account closure preserves the user record and revokes access');
+ const health=await (await fetch(base+'/api/health')).json();assert.equal(health.paymentProvider,'manual');assert.equal(health.marketplaceMode,'production');assert.equal(health.monitorSimulation,false);assert.equal(health.email,'UNCONFIGURED');
+ assert.deepEqual(errors,[]);console.info(JSON.stringify({result:'passed',checks:checks.length,responsiveChecks:48,browserErrors:errors}));
+}finally{await browser?.close();server.kill('SIGTERM');await db.$disconnect();}
+
+}
+main().catch(e=>{console.error(e instanceof Error?e.message:"Production browser check failed");process.exitCode=1;});

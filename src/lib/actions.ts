@@ -1,6 +1,9 @@
 'use server';
 
-import bcrypt from 'bcryptjs';
+import { registerAccount,deliverAccountToken,securityEvent,authenticateAccount } from './accounts';
+import { activeAccount,assertMarketplaceAccount } from './environment';
+import { validUsername } from './account-policy';
+import { checkBot } from './bot-protection';
 import { randomUUID } from 'node:crypto';
 import { Prisma, TransactionStatus, RewardType, RestrictionStatus, ListingStatus } from '@prisma/client';
 import { cookies } from 'next/headers';
@@ -103,15 +106,11 @@ export async function registerAction(_state: ActionState, data: FormData) {
   return action(async () => {
     await rateLimit('register', await requestIdentity(), 5, 60 * 60_000);
     const email = z.email('Enter a valid email address.').parse(input(data, 'email', 254).toLowerCase());
-    const name = z.string().min(2, 'Enter your name.').max(80).parse(input(data, 'name', 80));
-    const username = z.string().regex(/^[a-z0-9][a-z0-9_-]{2,29}$/, 'Use 3–30 lowercase letters, numbers, underscores or hyphens for your username.').parse(input(data, 'username', 30).toLowerCase());
-    const password = z.string().min(12, 'Use a password with at least 12 characters.').max(72, 'Use a password of 72 characters or fewer.').parse(data.get('password'));
-    if (Buffer.byteLength(password, 'utf8') > 72) throw new Error('The password must fit within 72 UTF-8 bytes.');
-    if (await db.user.findUnique({ where: { email } })) return { error: 'An account with these details already exists. Please sign in or use another email.' };
-    const user = await db.user.create({ data: {
-      email, passwordHash: await bcrypt.hash(password, 12), isDemo: isDemoMode(),
-      profile: { create: { username, displayName: name } }, wallet: { create: { isDemo: isDemoMode() } },
-    } });
+    await checkBot(String(data.get('cf-turnstile-response') || ''));
+    const user = await registerAccount({email,firstName:input(data,'firstName',60),lastName:input(data,'lastName',60),name:input(data,'name',60),username:input(data,'username',30),password:String(data.get('password')||''),confirmPassword:String(data.get('confirmPassword')||''),terms:checked(data,'terms')});
+    await securityEvent(user.id,'ACCOUNT_REGISTERED');
+    try { await deliverAccountToken(user.id,'VERIFY_EMAIL'); }
+    catch { await securityEvent(user.id,'VERIFICATION_EMAIL_DELIVERY_UNAVAILABLE'); }
     await createSession(user.id);
     redirect('/dashboard');
   });
@@ -122,12 +121,11 @@ export async function loginAction(_state: ActionState, data: FormData) {
     await rateLimit('login-ip', await requestIdentity(), 20);
     await rateLimit('login-email', email, 10);
     const password = data.get('password');
-    if (typeof password !== 'string' || password.length > 72 || Buffer.byteLength(password, 'utf8') > 72) return { error: 'Email or password is incorrect.' };
-    const user = await db.user.findUnique({ where: { email } });
-    // Constant-cost comparison also applies to unknown accounts.
-    const valid = await bcrypt.compare(password, user?.passwordHash || '$2b$12$K9Iy/YBOItdePAfoGnCioe2Q2hkOJuoGXFn.nJ/CXeb05md.fKa7K');
-    if (!user || !valid || user.isSuspended) return { error: 'Email or password is incorrect, or the account is unavailable.' };
-    await createSession(user.id);
+    if (typeof password !== 'string' || password.length > 72 || Buffer.byteLength(password, 'utf8') > 72) return { error: 'Invalid email or password.' };
+    const user = await authenticateAccount(email,password);
+    if(!user){await securityEvent(null,'LOGIN_FAILED');return {error:'Invalid email or password.'};}
+    await createSession(user.id,checked(data,'remember'));
+    await securityEvent(user.id,'LOGIN_SUCCEEDED');
     redirect(user.role === 'ADMIN' ? '/admin' : '/dashboard');
   });
 }
@@ -141,7 +139,7 @@ export async function logoutAction() {
 }
 export async function createListingAction(_state: ActionState, data: FormData) {
   return action(async () => {
-    const user = await requireUser();
+    const user = await requireUser(); assertMarketplaceAccount(user);
     await rateLimit('listing', user.id, 20, 60 * 60_000);
     const programId = input(data, 'programId', 100);
     const program = await db.program.findUnique({ where: { id: programId } });
@@ -164,6 +162,7 @@ export async function createListingAction(_state: ActionState, data: FormData) {
     const breakdown = calculateFees(bountyCents, fee);
     if (breakdown.netPayoutCents <= 0) throw new Error('The bounty must be positive.');
     await serial(async tx=>{
+      assertMarketplaceAccount(await tx.user.findUniqueOrThrow({where:{id:user.id}}));
       const wantsTargeted=input(data,'offerSource',30)==='targeted';let targetedOfferId=input(data,'targetedOfferId',100)||undefined;let publicOfferId:string|null=null;
       if(wantsTargeted&&!targetedOfferId){
        const proof=await readEvidence(data);if(!proof)throw new Error('Upload private targeted-offer evidence, or choose an already verified targeted offer.');
@@ -184,7 +183,7 @@ export async function createListingAction(_state: ActionState, data: FormData) {
 }
 export async function beginReferralAction(_state: ActionState, data: FormData) {
   return action(async () => {
-    const user = await requireUser();
+    const user = await requireUser(); assertMarketplaceAccount(user);
     await rateLimit('begin-referral', user.id, 15, 60 * 60_000);
     const transaction = await serial(tx=>acceptListing(tx,user.id,input(data,'listingId',100)));
     refresh(transaction.id);
@@ -263,12 +262,14 @@ export async function submitVerificationEvidenceAction(_state:ActionState,data:F
 }
 export async function sendMessageAction(_state: ActionState, data: FormData) {
   return action(async () => {
-    const user = await requireUser();
+    const user = await requireUser(); assertMarketplaceAccount(user);
     await rateLimit('message', user.id, 60);
     const id = input(data, 'transactionId', 100);
     const body = z.string().min(1, 'Enter a message.').max(3000).parse(input(data, 'body', 3000));
     await serial(async tx => {
+      const sender=await tx.user.findUniqueOrThrow({where:{id:user.id}}); assertMarketplaceAccount(sender);
       const record = await participant(tx, id, user.id, user.role === 'ADMIN');
+      if(sender.role==='ADMIN')await audit(tx,sender.id,'ADMIN_MESSAGE','ReferralTransaction',id);
       await tx.message.create({ data: { transactionId: id, senderId: user.id, body, isDemo: record.isDemo } });
       const recipient = record.referrerId === user.id ? record.referredUserId : record.referrerId;
       await notify(tx, recipient, 'New referral message', 'A participant sent a message in your referral transaction.', id);
@@ -315,6 +316,7 @@ export async function submitReviewAction(_state: ActionState, data: FormData) {
 export async function fundWalletAction(_state: ActionState, data: FormData) {
   return action(async () => {
     const user = await requireUser();
+    if(!isDemoMode())throw new Error('Wallet funding and withdrawals are disabled outside explicit demo mode. No money was moved.');
     await rateLimit('deposit', user.id, 10, 60 * 60_000);
     const amountCents = money(data, 'amount');
     if (amountCents < 100 || amountCents > 1_000_000) throw new Error('Add between $1 and $10,000 per deposit.');
@@ -340,6 +342,7 @@ export async function fundWalletAction(_state: ActionState, data: FormData) {
 export async function withdrawWalletAction(_state: ActionState, data: FormData) {
   return action(async () => {
     const user = await requireUser();
+    if(!isDemoMode())throw new Error('Wallet funding and withdrawals are disabled outside explicit demo mode. No money was moved.');
     await rateLimit('withdrawal', user.id, 10, 60 * 60_000);
     if (process.env.PAYMENT_MODE !== 'demo') throw new Error('Stripe withdrawals are not enabled. Complete the test payout integration before enabling withdrawals. No money was moved.');
     const amountCents = money(data, 'amount');
@@ -371,7 +374,7 @@ async function releaseReservation(tx: Tx, record: { id: string; referrerId: stri
   await tx.referralListing.updateMany({ where: { referrerId: record.referrerId, bountyCents: { lte: source.availableCents + record.reservedCents } }, data: { isFunded: true } });
 }
 async function demoPayout(tx: Tx, record: { id: string; status: TransactionStatus; referrerId: string; referredUserId: string; bountyCents: number; reservedCents: number; netPayoutCents: number; feeCents: number; isDemo: boolean }, adminId: string) {
-  if (process.env.PAYMENT_MODE !== 'demo' || !record.isDemo) throw new Error('This action only pays simulated demo balances. Stripe transfers are not yet enabled. No money was moved.');
+  if (!isDemoMode() || process.env.PAYMENT_MODE !== 'demo' || !record.isDemo) throw new Error('This action only pays simulated demo balances. Stripe transfers are not yet enabled. No money was moved.');
   if (record.status !== 'PAYOUT_PENDING' || record.reservedCents !== record.bountyCents) throw new Error('Only a verified, fully reserved referral can be paid.');
   const source = await tx.wallet.findUnique({ where: { userId: record.referrerId } });
   const target = await tx.wallet.findUnique({ where: { userId: record.referredUserId } });
@@ -445,7 +448,7 @@ export async function adminListingAction(_state: ActionState, data: FormData) {
       if (!listing) throw new Error('Listing not found.');
       const approved = safeReferralUrl(listing.referralUrl, listing.program.officialDomain);
       if(status==='ACTIVE')await listingRewardSource(tx,listing.referrerId,listing.programId,listing.targetedOfferId||undefined);
-      if (status === 'ACTIVE' && (!canUseProgram(listing.program) || !approved || listing.referrer.isSuspended)) throw new Error('This listing cannot be approved because its program, URL or owner is restricted.');
+      if (status === 'ACTIVE' && (!canUseProgram(listing.program) || !approved || !activeAccount(listing.referrer) || !listing.referrer.emailVerified)) throw new Error('This listing cannot be approved because its program, URL or owner is restricted.');
       await tx.referralListing.update({ where: { id }, data: { status, approvedReferralUrl: status === 'ACTIVE' ? approved : listing.approvedReferralUrl } });
       await audit(tx, admin.id, `LISTING_${status}`, 'ReferralListing', id);
       await notify(tx, listing.referrerId, 'Listing reviewed', `Your referral listing is now ${status.toLowerCase().replaceAll('_', ' ')}.`);
@@ -458,14 +461,14 @@ export async function adminUserAction(_state: ActionState, data: FormData) {
     const admin = await requireAdmin();
     const id = input(data, 'userId', 100);
     const status = input(data, 'status', 20);
-    if (!['ACTIVE', 'SUSPENDED'].includes(status)) throw new Error('Choose active or suspended.');
+    if (!['ACTIVE', 'RESTRICTED', 'SUSPENDED'].includes(status)) throw new Error('Choose active, restricted or suspended.');
     if (id === admin.id) throw new Error('You cannot suspend your own administrator account.');
     await serial(async tx => {
       const user = await tx.user.findUnique({ where: { id } });
-      if (!user) throw new Error('User not found.');
+      if (!user || user.accountStatus==='CLOSED') throw new Error('User not found or account closure requires a separate review.');
       if (user.role === 'ADMIN') throw new Error('Administrator suspension requires a separate account security process.');
-      await tx.user.update({ where: { id }, data: { isSuspended: status === 'SUSPENDED' } });
-      if (status === 'SUSPENDED') {
+      await tx.user.update({ where: { id }, data: { isSuspended: status === 'SUSPENDED', accountStatus: status as 'ACTIVE'|'RESTRICTED'|'SUSPENDED' } });
+      if (status !== 'ACTIVE') {
         await tx.session.deleteMany({ where: { userId: id } });
         await tx.referralListing.updateMany({ where: { referrerId: id, status: 'ACTIVE' }, data: { status: 'DISABLED' } });
       }
@@ -506,9 +509,11 @@ export async function adminProgramAction(_state: ActionState, data: FormData) {
       countries: countryList(data), eligibilityNotes: input(data, 'eligibilityNotes', 5000), adminNotes: input(data, 'adminNotes', 5000),
       termsLastChecked: termsUrl ? new Date() : null, lastVerifiedAt: restrictionStatus === 'ALLOWED' ? new Date() : null,
     };
+    if (restrictionStatus === 'ALLOWED' && fields.adminNotes.length<10)throw new Error('Explain the official terms reviewed before enabling this program.');
     if (restrictionStatus === 'ALLOWED' && (!fields.publicSharingAllowed || !fields.cashBountyAllowed || !fields.thirdPartyMarketplaceAllowed || !fields.termsUrl)) throw new Error('Allowed programs require a terms URL and verified permissions for public sharing, cash bounties and marketplaces.');
     const program = await serial(async tx => {
       const record = id ? await tx.program.update({ where: { id }, data: fields }) : await tx.program.create({ data: { ...fields, isDemo: isDemoMode() } });
+      if(restrictionStatus==='ALLOWED' && !record.isDemo && !record.currentPublicOfferId){const offer=await tx.programOffer.create({data:{programId:record.id,referrerRewardType:record.rewardType,referrerRewardAmount:record.rewardType==='CASH'?record.referrerRewardCents:null,estimatedReferrerValueCents:record.referrerRewardCents,qualificationRequirement:record.eligibilityNotes,countries:record.countries,sourceUrl:record.termsUrl,reviewStatus:'VERIFIED',verificationMethod:'ADMIN_TERMS_REVIEW',verifiedAt:new Date(),isCurrent:true,isDemo:false}});await tx.program.update({where:{id:record.id},data:{currentPublicOfferId:offer.id}});}
       await tx.programRestriction.upsert({ where: { programId: record.id }, create: { programId: record.id, status: restrictionStatus, reason: fields.adminNotes, updatedById: admin.id, isDemo: record.isDemo }, update: { status: restrictionStatus, reason: fields.adminNotes, updatedById: admin.id } });
       await tx.programTermsHistory.create({ data: { programId: record.id, termsUrl: fields.termsUrl, summary: `${restrictionStatus}: ${fields.adminNotes}`, checkedById: admin.id, isDemo: record.isDemo } });
       if (!canUseProgram(record)) await tx.referralListing.updateMany({ where: { programId: record.id, status: 'ACTIVE' }, data: { status: 'DISABLED' } });
@@ -593,8 +598,10 @@ export async function settingsAction(_state: ActionState, data: FormData) {
   return action(async () => {
     const user = await requireUser();
     const displayName = z.string().min(2).max(80).parse(input(data, 'name', 80));
-    const username = z.string().regex(/^[a-z0-9][a-z0-9_-]{2,29}$/, 'Use 3–30 lowercase letters, numbers, underscores or hyphens.').parse(input(data, 'username', 30).toLowerCase());
-    await db.profile.update({ where: { userId: user.id }, data: { displayName, username, bio: input(data, 'bio', 1500) } });
+    const username = validUsername(input(data,'username',30));
+    if(username!==user.profile?.username && user.profile?.usernameChangedAt && Date.now()-user.profile.usernameChangedAt.getTime()<30*86400000) throw new Error('You can change your username once every 30 days.');
+    const avatarUrl=input(data,'avatarUrl',200);if(avatarUrl && !/^\/images\/[a-zA-Z0-9._-]+$/.test(avatarUrl))throw new Error('Use an approved local profile image path. External tracking images are not allowed.');
+    await db.$transaction(async tx=>{await tx.profile.update({where:{userId:user.id},data:{displayName,username,bio:input(data,'bio',500),avatarUrl:avatarUrl||null,...(username!==user.profile?.username?{usernameChangedAt:new Date()}:{})}});await tx.user.update({where:{id:user.id},data:{firstName:input(data,'firstName',60),lastName:input(data,'lastName',60),emailNotifications:checked(data,'emailNotifications')}});});
     revalidatePath('/dashboard/settings'); revalidatePath(`/profile/${username}`); return { success: 'Profile saved.' };
   });
 }
@@ -609,7 +616,7 @@ export async function markNotificationsReadAction(_state: ActionState, _data: Fo
 
 export async function userListingAction(_state: ActionState, data: FormData) {
   return action(async () => {
-    const user = await requireUser();
+    const user = await requireUser(); assertMarketplaceAccount(user);
     const id = input(data, 'listingId', 100);
     const status = input(data, 'status', 30);
     if (!['DISABLED', 'PENDING_APPROVAL'].includes(status)) throw new Error('Choose disable or request review.');

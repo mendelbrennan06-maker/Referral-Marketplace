@@ -1,3 +1,4 @@
+import { isProductionMarketplace } from './environment';
 /** Currency amounts are integer cents; basis points keep fee math independent of floats. */
 export type FeeConfig = {
   percentageBps: number;
@@ -50,6 +51,8 @@ export function calculateFees(bountyCents: number, config: FeeConfig = DEFAULT_F
 
 type ProgramEligibility = {
   catalogActive?: boolean;
+  isDemo?: boolean;
+  lastVerifiedAt?: Date | null;
   restrictionStatus: string;
   publicSharingAllowed: boolean;
   cashBountyAllowed: boolean;
@@ -58,7 +61,7 @@ type ProgramEligibility = {
 
 /** UNKNOWN programs stay disabled, including known brands seeded for demonstration. */
 export function canUseProgram(program: ProgramEligibility) {
-  return program.catalogActive !== false && program.restrictionStatus === "ALLOWED" && program.publicSharingAllowed &&
+  return (!isProductionMarketplace() || (program.isDemo === false && !!program.lastVerifiedAt)) && program.catalogActive !== false && program.restrictionStatus === "ALLOWED" && program.publicSharingAllowed &&
     program.cashBountyAllowed && program.thirdPartyMarketplaceAllowed;
 }
 

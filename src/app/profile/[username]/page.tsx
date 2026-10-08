@@ -1,3 +1,5 @@
+import { publicData } from '@/lib/environment';
+import { availableListingWhere } from "@/lib/catalog";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -10,17 +12,17 @@ import { Money, ProgramMark, EmptyState } from "@/components/ui";
 type Props = { params: Promise<{ username: string }> };
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { username } = await params;
-  const profile = await db.profile.findUnique({ where: { username }, select: { displayName: true } });
+  const profile = await db.profile.findUnique({ where: { username:username.toLowerCase(),user:{...publicData(),isSuspended:false,accountStatus:"ACTIVE"} }, select: { displayName: true } });
   return { title: profile ? `${profile.displayName} — referrer profile` : "Profile not found", alternates: { canonical: `/profile/${username}` } };
 }
 export default async function ProfilePage({ params }: Props) {
   const { username } = await params;
-  const profile = await db.profile.findUnique({ where: { username }, select: { userId: true, username: true, displayName: true, bio: true, identityVerified: true, user: { select: { ...publicReferrerSelect, isSuspended: true } } } });
+  const profile = await db.profile.findUnique({ where: { username:username.toLowerCase(),user:{...publicData(),isSuspended:false,accountStatus:"ACTIVE"} }, select: { userId: true, username: true, displayName: true, bio: true, identityVerified: true, user: { select: { ...publicReferrerSelect, isSuspended: true } } } });
   if (!profile || profile.user.isSuspended) notFound();
   const [listings, reviews, payout, fee] = await Promise.all([
-    db.referralListing.findMany({ where: { referrerId: profile.userId, status: "ACTIVE", availableSlots: { gt: 0 }, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, include: { program: { include: { category: true } } }, orderBy: { createdAt: "desc" }, take: 100 }),
-    db.review.findMany({ where: { subjectId: profile.userId }, select: { id: true, rating: true, body: true, isDemo: true, createdAt: true, reviewerRole: true, reviewer: { select: { profile: { select: { username: true, displayName: true } } } } }, orderBy: { createdAt: "desc" }, take: 30 }),
-    db.referralTransaction.aggregate({ where: { referrerId: profile.userId, status: "PAID" }, _sum: { netPayoutCents: true } }),
+    db.referralListing.findMany({ where: { referrerId: profile.userId,...availableListingWhere() }, include: { program: { include: { category: true } } }, orderBy: { createdAt: "desc" }, take: 100 }),
+    db.review.findMany({ where: { subjectId: profile.userId,...publicData() }, select: { id: true, rating: true, body: true, isDemo: true, createdAt: true, reviewerRole: true, reviewer: { select: { profile: { select: { username: true, displayName: true } } } } }, orderBy: { createdAt: "desc" }, take: 30 }),
+    db.referralTransaction.aggregate({ where: { referrerId: profile.userId, status: "PAID",...publicData() }, _sum: { netPayoutCents: true } }),
     db.feeSetting.findUnique({ where: { id: "global" } }),
   ]);
   const offers = listings.filter(l => canUseProgram(l.program));

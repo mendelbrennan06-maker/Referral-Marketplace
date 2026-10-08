@@ -11,7 +11,8 @@ const sources:Record<string,[string,'OFFICIAL_REFERRAL_PAGE'|'OFFICIAL_TERMS'|'O
  't-mobile':['https://www.t-mobile.com/support/account/refer-a-friend','OFFICIAL_HELP_PAGE'],
 };
 async function main(){
- const programs=await db.program.findMany();
+ await db.feeSetting.upsert({where:{id:'global'},create:{id:'global',percentageBps:1000},update:{}});
+ const programs=await db.program.findMany({where:process.env.APP_ENV==='demo'?{}:{isDemo:false}});
  for(const program of programs){
   if(!program.currentPublicOfferId){await db.$transaction(async tx=>{
    const current=await tx.program.findUniqueOrThrow({where:{id:program.id}});if(current.currentPublicOfferId)return;

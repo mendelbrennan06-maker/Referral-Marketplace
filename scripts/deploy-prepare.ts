@@ -10,6 +10,10 @@ function run(name: string) {
 async function main() {
   run("db:migrate");
   run("catalog:prepare");
+  if (process.env.APP_ENV !== "demo") {
+    if (process.env.DEMO_BOOTSTRAP_ONCE === "true" || process.env.DEMO_SEED === "true") throw new Error("Demo seeding is forbidden outside APP_ENV=demo.");
+    return;
+  }
   if (process.env.DEMO_BOOTSTRAP_ONCE !== "true") return;
   if (process.env.PAYMENT_MODE !== "demo" || process.env.DEMO_SEED !== "true") {
     throw new Error("One-time demo initialization requires explicit PAYMENT_MODE=demo and DEMO_SEED=true.");

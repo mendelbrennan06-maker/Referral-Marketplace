@@ -3,6 +3,7 @@ import { cache } from 'react';
 import { createHmac, randomBytes } from 'node:crypto';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { isProductionMarketplace } from './environment';
 import { db } from '@/lib/db';
 
 export const SESSION_COOKIE = 'refermarket_session';
@@ -20,9 +21,9 @@ export function hashToken(token: string) {
   return createHmac('sha256', authSecret()).update(token).digest('hex');
 }
 
-export async function createSession(userId: string) {
+export async function createSession(userId: string, remember = false) {
   const token = randomBytes(32).toString('base64url');
-  const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400000);
+  const expiresAt = new Date(Date.now() + (remember ? 30 : SESSION_DAYS) * 86400000);
   await db.session.create({ data: { tokenHash: hashToken(token), userId, expiresAt } });
   const jar = await cookies();
   const previous = jar.get(SESSION_COOKIE)?.value;
@@ -39,7 +40,7 @@ export const currentUser = cache(async () => {
   const session = await db.session.findUnique({
     where: { tokenHash: hashToken(token) }, include: { user: { include: { profile: true, wallet: true } } },
   });
-  if (!session || session.expiresAt <= new Date() || session.user.isSuspended) return null;
+  if (!session || session.expiresAt <= new Date() || session.user.isSuspended || ['CLOSED','SUSPENDED'].includes(session.user.accountStatus) || (isProductionMarketplace() && session.user.isDemo && session.user.role !== 'ADMIN')) return null;
   return session.user;
 });
 

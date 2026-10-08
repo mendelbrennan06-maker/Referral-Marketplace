@@ -1,3 +1,4 @@
+import { assertMarketplaceAccount } from './environment';
 import { Prisma } from '@prisma/client';
 import { calculateFees, canUseProgram, safeReferralUrl } from './marketplace';
 import { configuredProvider } from './payment-providers';
@@ -6,6 +7,7 @@ import { targetedOfferValid } from './monitoring/policy';
 export async function acceptListing(tx:Prisma.TransactionClient,userId:string,listingId:string,bidBountyCents?:number) {
  const user=await tx.user.findUnique({where:{id:userId}});
  const listing=await tx.referralListing.findUnique({where:{id:listingId},include:{program:true,referrer:true,targetedOffer:true}});
+ if(user)assertMarketplaceAccount(user);if(listing)assertMarketplaceAccount(listing.referrer);
  if(!user||user.isSuspended||!listing||listing.status!=='ACTIVE'||listing.referrer.isSuspended||listing.availableSlots<1||(listing.expiresAt&&listing.expiresAt<=new Date())||!canUseProgram(listing.program))throw new Error('This offer is no longer available. Please choose another.');
  if(listing.offerType!=='STANDARD')throw new Error('Guaranteed offer settlement is not enabled.');
  if(listing.targetedOffer&&!targetedOfferValid(listing.targetedOffer))throw new Error('This targeted offer has expired or awaits verification.');

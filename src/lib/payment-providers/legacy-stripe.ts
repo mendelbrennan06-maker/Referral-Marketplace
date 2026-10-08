@@ -1,4 +1,5 @@
 import 'server-only';
+import { isProductionMarketplace } from '../environment';
 import Stripe from 'stripe';
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -7,6 +8,7 @@ import { site } from '@/lib/config';
 
 /** Never initializes live Stripe. Every provider flow in this MVP is test-only. */
 export function testStripe() {
+  if(isProductionMarketplace())throw new Error('Stripe test money is disabled in the production marketplace.');
   if (process.env.PAYMENT_MODE !== 'stripe') throw new Error('Stripe test payments are not enabled.');
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key?.startsWith('sk_test_')) throw new Error('A Stripe test secret key is required. Live payments are not supported.');

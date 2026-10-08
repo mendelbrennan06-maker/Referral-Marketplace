@@ -1,3 +1,4 @@
+import { publicData,publicPrograms } from '@/lib/environment';
 import { ProgramComparison } from "@/components/program-comparison";
 import { availableListingWhere } from "@/lib/catalog";
 import Link from "next/link";
@@ -20,11 +21,11 @@ export default async function MarketplacePage({ searchParams }: { searchParams: 
   const category = typeof params.category === "string" ? params.category.slice(0, 80) : "";
   const view = params.view === "table" ? "table" : "cards";
   const sort = sorts.some(([key]) => key === params.sort) ? params.sort! : "best";
-  const where: Prisma.ProgramWhereInput = { ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }, { category: { name: { contains: q, mode: "insensitive" } } }] } : {}), ...(category ? { category: { slug: category } } : {}) };
+  const where: Prisma.ProgramWhereInput = { ...publicPrograms(),...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }, { category: { name: { contains: q, mode: "insensitive" } } }] } : {}), ...(category ? { category: { slug: category } } : {}) };
   const [programs, suggestions, categories] = await Promise.all([
-    db.program.findMany({ where, include: { category: true, _count: { select: { transactions: true, clicks: true } }, listings: { where: availableListingWhere(), include: { referrer: { select: publicReferrerSelect } }, take: 100 } }, orderBy: { name: "asc" }, take: 100 }),
-    db.program.findMany({ select: { name: true, slug: true, category: { select: { name: true } } }, orderBy: { name: "asc" }, take: 100 }),
-    db.category.findMany({ orderBy: { name: "asc" }, take: 20 }),
+    db.program.findMany({ where, include: { category: true, _count: { select: { transactions: {where:publicData()}, clicks: true } }, listings: { where: availableListingWhere(), include: { referrer: { select: publicReferrerSelect } }, take: 100 } }, orderBy: { name: "asc" }, take: 100 }),
+    db.program.findMany({ where:publicPrograms(),select: { name: true, slug: true, category: { select: { name: true } } }, orderBy: { name: "asc" }, take: 100 }),
+    db.category.findMany({where:publicData(), orderBy: { name: "asc" }, take: 20 }),
   ]);
   const scored = programs.map(program => {
     const offers = canUseProgram(program) ? program.listings : [];

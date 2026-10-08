@@ -78,7 +78,46 @@ enum SwapDirection {
   HAVE
 }
 
+enum AccountStatus {
+ ACTIVE
+ RESTRICTED
+ SUSPENDED
+ CLOSED
+}
+enum AccountTokenPurpose {
+ VERIFY_EMAIL
+ RESET_PASSWORD
+}
+model AccountToken {
+ id String @id @default(cuid())
+ userId String
+ tokenHash String @unique
+ purpose AccountTokenPurpose
+ expiresAt DateTime
+ consumedAt DateTime?
+ createdAt DateTime @default(now())
+ user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+ @@index([userId,purpose,expiresAt])
+}
+model SecurityEvent {
+ id String @id @default(cuid())
+ userId String?
+ action String
+ createdAt DateTime @default(now())
+ user User? @relation(fields:[userId],references:[id],onDelete:SetNull)
+ @@index([userId,createdAt])
+}
 model User {
+ firstName String @default("")
+ lastName String @default("")
+ emailVerifiedAt DateTime?
+ termsAcceptedAt DateTime?
+ termsVersion String?
+ accountStatus AccountStatus @default(ACTIVE)
+ closureRequestedAt DateTime?
+ emailNotifications Boolean @default(true)
+ accountTokens AccountToken[]
+ securityEvents SecurityEvent[]
   id                 String                     @id @default(cuid())
   email              String                     @unique
   passwordHash       String
@@ -144,6 +183,7 @@ model Profile {
   displayName      String
   bio              String   @default("")
   avatarUrl        String?
+  usernameChangedAt DateTime?
   identityVerified Boolean  @default(false)
   phoneVerified    Boolean  @default(false)
   createdAt        DateTime @default(now())
@@ -154,6 +194,7 @@ model Profile {
 model Session {
   id        String   @id @default(cuid())
   tokenHash String   @unique
+  deviceLabel String @default("Browser session")
   userId    String
   expiresAt DateTime
   createdAt DateTime @default(now())

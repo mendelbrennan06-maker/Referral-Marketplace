@@ -1,3 +1,4 @@
+import { publicData,isProductionMarketplace } from '../environment';
 import { createHash,randomUUID } from 'node:crypto';
 import { Prisma,type ProgramOffer,type Program,type ProgramSource } from '@prisma/client';
 import { db } from '../db';
@@ -73,7 +74,7 @@ async function recordObservation(program:Program,source:ProgramSource,runId:stri
    const review=await queueManualReview(tx,program.id,'AMBIGUOUS_EXTRACTION',`${program.name}: official source retrieved, but rewards/terms could not be extracted with confidence (${observation.extractionStatus||'AMBIGUOUS'}). Public values were preserved.`,`ambiguous:${source.id}:${observation.contentHash}`);if(review.created)reviews++;
   }
   if(changesDetected)await tx.program.update({where:{id:program.id},data:{lastChangedAt:new Date()}});
-  await tx.programSource.update({where:{id:source.id},data:{lastCheckedAt:new Date(),lastStatus:observation.isDemo?'DEMO_SIMULATED_NOT_RETRIEVED':'RETRIEVED'}});
+  await tx.programSource.update({where:{id:source.id},data:{lastCheckedAt:new Date(),lastStatus:observation.isDemo?'SIMULATED':observation.extractionStatus==='NOT_CONFIGURED'?'UNCONFIGURED':observation.extractionStatus==='AI_FAILED'?'FAILED':'REAL'}});
   return {changesDetected,reviews,updated};
  });
 }
@@ -87,8 +88,8 @@ export async function checkProgram(programId:string,runId:string,budget:Monitori
   const observations:{source:ProgramSource;observation:Observation}[]=[];
   if(!sources.length){failures++;const review=await paymentTransaction(tx=>queueManualReview(tx,program.id,'MISSING_OFFICIAL_SOURCE',`${program.name}: no authoritative monitoring source configured. No website was checked.`,`missing-source:${program.id}`));if(review.created)reviews++;}
   for(const source of sources.slice(0,6)){
-   try{if(source.requiresAuthentication)throw new Error('Authentication required; no account access or credentials are supported.');const observation=await monitorAdapter(source).check(program,source,{previous:source.snapshots[0],budget});observations.push({source,observation});successes++;if(!observation.isDemo)realSuccesses++;}
-   catch(e){failures++;const reason=e instanceof Error?e.message:'Monitoring unavailable';await paymentTransaction(async tx=>{await tx.programSourceSnapshot.create({data:{sourceId:source.id,runId,error:reason.slice(0,2000),extractionResult:{sourceUrl:source.url},isDemo:source.adapter==='demo'}});await tx.programSource.update({where:{id:source.id},data:{lastCheckedAt:new Date(),lastStatus:'UNAVAILABLE'}});const review=await queueManualReview(tx,program.id,'SOURCE_FAILURE',`${program.name}: ${reason}`,`source-failure:${source.id}:${now.toISOString().slice(0,10)}`);if(review.created)reviews++;});
+   try{if(source.requiresAuthentication)throw new Error('Authentication required; no account access or credentials are supported.');const observation=await monitorAdapter(source).check(program,source,{previous:source.snapshots[0],budget});observations.push({source,observation});if(['NOT_CONFIGURED','AI_FAILED','BUDGET_EXCEEDED'].includes(observation.extractionStatus||''))failures++;else {successes++;if(!observation.isDemo)realSuccesses++;}}
+   catch(e){failures++;const reason=e instanceof Error?e.message:'Monitoring unavailable';await paymentTransaction(async tx=>{await tx.programSourceSnapshot.create({data:{sourceId:source.id,runId,error:reason.slice(0,2000),extractionResult:{sourceUrl:source.url},isDemo:false,extractionStatus:reason.startsWith('UNCONFIGURED')?'UNCONFIGURED':'FAILED'}});await tx.programSource.update({where:{id:source.id},data:{lastCheckedAt:new Date(),lastStatus:reason.startsWith('UNCONFIGURED')?'UNCONFIGURED':'FAILED'}});const review=await queueManualReview(tx,program.id,'SOURCE_FAILURE',`${program.name}: ${reason}`,`source-failure:${source.id}:${now.toISOString().slice(0,10)}`);if(review.created)reviews++;});
     if(source.adapter!=='demo'&&discoveryEligible(reason)){
      const discovery=await discoverOfficialSources(program,source.url,budget);
      await paymentTransaction(async tx=>{
@@ -108,7 +109,7 @@ export async function checkProgram(programId:string,runId:string,budget:Monitori
  }catch(e){await db.program.update({where:{id:program.id},data:{lastCheckedAt:now,nextCheckAt:nextCheck(now,program.monitoringFrequencyHours),consecutiveFailures:{increment:1},monitoringLeaseUntil:null}});throw e;}
 }
 export async function runDailyMonitoring(options:{programId?:string;manual?:boolean;limit?:number}={}){
- const budget=monitoringBudget();const now=new Date();const runKey=options.manual?`manual:${randomUUID()}`:`scheduled:${now.toISOString().slice(0,13)}`;
+ const budget=monitoringBudget();const now=new Date();const runKey=options.manual?`manual:${randomUUID()}`:`scheduled:${now.toISOString().slice(0,10)}`;
  const run=await db.$transaction(async tx=>{
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('refermarket-monitor-job'))`;
   if(await tx.monitoringRun.findFirst({where:{status:'RUNNING',leaseUntil:{gt:now}}}))return null;
@@ -120,11 +121,12 @@ export async function runDailyMonitoring(options:{programId?:string;manual?:bool
   // Expiry is enforced on every listing/referral access too, so scheduler delays cannot prolong eligibility.
   const expired=await db.targetedReferralOffer.findMany({where:{verificationStatus:'VERIFIED',OR:[{verificationExpiresAt:{lte:now}},{expiresAt:{lte:now}}]},select:{id:true}});
   if(expired.length)await db.$transaction([db.targetedReferralOffer.updateMany({where:{id:{in:expired.map(x=>x.id)}},data:{verificationStatus:'EXPIRED'}}),db.referralListing.updateMany({where:{targetedOfferId:{in:expired.map(x=>x.id)},status:'ACTIVE'},data:{status:'DISABLED'}})]);
-  const due=await db.program.findMany({where:{monitoringEnabled:true,catalogActive:true,...(options.programId?{id:options.programId}:{nextCheckAt:{lte:now}}),OR:[{monitoringLeaseUntil:null},{monitoringLeaseUntil:{lt:now}}]},orderBy:[{monitoringPriority:'asc'},{nextCheckAt:'asc'}],take:Math.max(1,Math.min(100,options.limit||100)),select:{id:true}});
+  const due=await db.program.findMany({where:{...publicData(),monitoringEnabled:true,catalogActive:true,...(options.programId?{id:options.programId}:{nextCheckAt:{lte:new Date(now.getTime()+5*60000)}}),OR:[{monitoringLeaseUntil:null},{monitoringLeaseUntil:{lt:now}}]},orderBy:[{monitoringPriority:'asc'},{nextCheckAt:'asc'}],take:Math.max(1,Math.min(100,options.limit||100)),select:{id:true}});
   await db.monitoringRun.update({where:{id:run.id},data:{programsQueued:due.length}});
   const totals={programsChecked:0,programsUpdated:0,changesDetected:0,manualReviewsCreated:0,failures:0};let cursor=0;
   const concurrency=Math.max(1,Math.min(4,Number(process.env.MONITOR_CONCURRENCY)||2));
   await Promise.all(Array.from({length:concurrency},async()=>{while(cursor<due.length){const id=due[cursor++].id;try{const result=await checkProgram(id,run.id,budget);totals.programsChecked+=result.checked;totals.programsUpdated+=result.updated;totals.changesDetected+=result.changes;totals.manualReviewsCreated+=result.reviews;totals.failures+=result.failures;}catch{totals.failures++;}}}));
-  return await db.monitoringRun.update({where:{id:run.id},data:{...totals,status:totals.failures?'COMPLETED_WITH_FAILURES':'COMPLETED',completedAt:new Date()}});
+  const emptyStatus=isProductionMarketplace()&&!(await db.program.count({where:{...publicData(),monitoringEnabled:true,catalogActive:true}}))?'UNCONFIGURED':'NO_PROGRAMS_DUE';
+  return await db.monitoringRun.update({where:{id:run.id},data:{...totals,status:!due.length?emptyStatus:totals.failures?'COMPLETED_WITH_FAILURES':'COMPLETED',completedAt:new Date()}});
  }catch(e){await db.monitoringRun.update({where:{id:run.id},data:{status:'FAILED',completedAt:new Date(),error:e instanceof Error?e.message.slice(0,1000):'Job failed'}});throw e;}
 }

@@ -64,6 +64,7 @@ const transactionSpecs = statuses.map((status, index) => {
 });
 
 async function seed() {
+  if (process.env.APP_ENV !== "demo") throw new Error("Demo seed requires explicit APP_ENV=demo.");
   if (process.env.DEMO_SEED !== "true") {
     console.info("Demo seeding skipped. Set DEMO_SEED=true only for an intentional demo environment.");
     return;
@@ -90,10 +91,10 @@ async function seed() {
       const earnedCents = person.key === "customer" ? transactionSpecs.filter((item) => item.status === "PAID").reduce((sum, item) => sum + item.netPayoutCents, 0) : 0;
       const pendingCents = person.key === "customer" ? transactionSpecs.filter((item) => item.status !== "PAID").reduce((sum, item) => sum + item.netPayoutCents, 0) : 0;
       await tx.user.upsert({
-        where: { id: `demo-user-${person.key}` }, update: {},
+        where: { id: `demo-user-${person.key}` }, update: { emailVerified: true, emailVerifiedAt: new Date() },
         create: {
           id: `demo-user-${person.key}`, email: `demo-${person.key}@refermarket.example`, passwordHash,
-          role: person.key === "admin" ? "ADMIN" : "USER", isDemo: true, emailVerified: false,
+          role: person.key === "admin" ? "ADMIN" : "USER", isDemo: true, emailVerified: true, emailVerifiedAt: new Date(),
           createdAt: new Date(now.getTime() - (150 + people.indexOf(person) * 17) * DAY),
           profile: { create: { username: `demo-${person.key}`, displayName: person.name, bio: person.bio } },
           wallet: { create: {

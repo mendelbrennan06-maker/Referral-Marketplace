@@ -1,3 +1,5 @@
+import { appEnvironment,allowSimulation } from '@/lib/environment';
+import { emailStatus } from '@/lib/email';
 import { db } from '@/lib/db';
 import { authSecret } from '@/lib/auth';
 import { configuredProvider } from '@/lib/payment-providers';
@@ -19,7 +21,7 @@ export async function GET() {
       db.referralTransaction.findFirst({ select: { id: true } }),
     ]);
     if (!fee) throw new Error('Marketplace initialization is incomplete.');
-    return Response.json({ status: 'ok', database: 'ready', paymentMode:paymentProvider, paymentProvider }, { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json({ status: 'ok', database: 'ready', paymentMode:paymentProvider, paymentProvider,marketplaceMode:appEnvironment(),email:emailStatus(),monitorSimulation:allowSimulation() }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     return Response.json({ status: 'unavailable', readiness: 'Database or application configuration is unavailable.' }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
   }

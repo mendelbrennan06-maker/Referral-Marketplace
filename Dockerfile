@@ -14,6 +14,11 @@ RUN if [ -n "$BUILD_CA_PEM" ]; then \
     fi; \
     npm ci --no-audit --no-fund && rm -f /tmp/build-ca.crt
 COPY . .
+# Public client configuration only; provider secrets remain runtime variables.
+ARG NEXT_PUBLIC_SITE_NAME="Referral Market"
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY=""
+ENV NEXT_PUBLIC_SITE_NAME=$NEXT_PUBLIC_SITE_NAME
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=$NEXT_PUBLIC_TURNSTILE_SITE_KEY
 RUN npm run build
 
 FROM base AS runtime

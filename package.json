@@ -18,7 +18,8 @@
     "deploy:prepare": "tsx scripts/deploy-prepare.ts",
     "catalog:prepare": "tsx scripts/prepare-catalog.ts",
     "monitor:daily": "tsx scripts/monitor-daily.ts",
-    "test:integration": "PAYMENT_INTEGRATION_TESTS=true MONITOR_INTEGRATION_TESTS=true REQUEST_INTEGRATION_TESTS=true node --import tsx --test tests/*integration.test.ts"
+    "test:integration": "ACCOUNT_INTEGRATION_TESTS=true PAYMENT_INTEGRATION_TESTS=true MONITOR_INTEGRATION_TESTS=true REQUEST_INTEGRATION_TESTS=true node --import tsx --test tests/*integration.test.ts",
+    "test:e2e:production": "tsx scripts/production-smoke.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",

@@ -1,3 +1,4 @@
+import { assertMarketplaceAccount,activeAccount } from './environment';
 import { Prisma, type ObligationStatus, type PaymentObligation, type AuthorizationScope, type VerificationLevel } from '@prisma/client';
 import { db } from './db';
 import { canUseProgram } from './marketplace';
@@ -23,7 +24,8 @@ export async function paymentNotice(tx:Tx,userId:string,type:string,title:string
 }
 async function activeUser(tx:Tx,id:string,admin=false) {
  const user=await tx.user.findUnique({where:{id},include:{profile:true}});
- if(!user||user.isSuspended||(admin&&user.role!=='ADMIN')) throw new Error(admin?'Administrator access required.':'Account unavailable.');
+ if(!user||!activeAccount(user)||(admin&&user.role!=='ADMIN')) throw new Error(admin?'Administrator access required.':'Account unavailable.');
+ if(!admin)assertMarketplaceAccount(user);
  return user;
 }
 export async function connectPaymentMethod(userId:string) {
@@ -78,7 +80,7 @@ export async function ensurePaymentObligation(tx:Tx,transactionId:string,actorId
  if(r.paymentProvider!==provider) throw new Error('The accepted referral provider must be reconciled before switching payment modes.');
  const o=await tx.paymentObligation.create({data:{referralTransactionId:r.id,payerUserId:r.referrerId,payeeUserId:r.referredUserId,bountyCents:r.bountyCents,feeCents:r.feeCents,totalDebitCents:r.totalDebitCents,provider,isDemo:provider==='demo',dueAt:new Date(Date.now()+7*86400000)}});
  await paymentAudit(tx,actorId,'OBLIGATION_CREATED','PaymentObligation',o.id,{bountyCents:o.bountyCents,feeCents:o.feeCents,totalDebitCents:o.totalDebitCents});
- await paymentNotice(tx,o.payerUserId,'AUTHORIZATION_REQUIRED','Referral verified — payment authorization required','Connect and authorize your method to collect the full bounty plus the marketplace fee after verification.',r.id);
+ await paymentNotice(tx,o.payerUserId,'AUTHORIZATION_REQUIRED',provider==='manual'?'Referral verified — awaiting manual settlement':'Referral verified — payment authorization required',provider==='manual'?'Arrange settlement outside the app. An administrator records external payment references; no money has moved here.':'Connect and authorize your method to collect the full bounty plus the marketplace fee after verification.',r.id);
  await paymentNotice(tx,o.payeeUserId,'REFERRAL_VERIFIED','Referral verified','Your full advertised bounty will be paid after collection and funds availability. Verification alone does not mean paid.',r.id);
  return o;
 }

@@ -10,6 +10,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   // Authorize using metadata before fetching private file bytes.
   const metadata = await db.uploadedEvidence.findUnique({ where: { id }, select: { id: true, transaction: { select: { referrerId: true, referredUserId: true } } } });
   if (!metadata || !canAccessTransaction(user, metadata.transaction)) return Response.json({ error: 'File not found.' }, { status: 404 });
+ if(user.role==='ADMIN')await db.adminAction.create({data:{adminId:user.id,action:'PRIVATE_EVIDENCE_VIEWED',entityType:'UploadedEvidence',entityId:id}});
   const evidence = await db.uploadedEvidence.findUnique({ where: { id } });
   if (!evidence) return Response.json({ error: 'File not found.' }, { status: 404 });
   const filename = evidence.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');

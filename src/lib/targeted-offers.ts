@@ -1,3 +1,4 @@
+import { assertMarketplaceAccount } from './environment';
 import { paymentTransaction,paymentAudit } from './payment-service';
 import { targetedOfferValid } from './monitoring/policy';
 import { canUseProgram } from './marketplace';
@@ -5,6 +6,7 @@ import { RewardType,Prisma } from '@prisma/client';
 export type TargetedInput={programId:string;referrerRewardType:RewardType;referrerRewardAmount:number;referredRewardType?:RewardType;referredRewardAmount?:number;qualificationRequirement:string;expiresAt?:Date|null;notes?:string;evidence:{data:Buffer;mimeType:string;sizeBytes:number;fileName:string}};
 export async function submitTargetedOffer(tx:Prisma.TransactionClient,userId:string,data:TargetedInput){
  const user=await tx.user.findUnique({where:{id:userId}});const program=await tx.program.findUnique({where:{id:data.programId}});
+ if(user)assertMarketplaceAccount(user);
  if(!user||user.isSuspended||!program||!canUseProgram(program))throw new Error('Eligible program/account required.');
  if(!Number.isInteger(data.referrerRewardAmount)||data.referrerRewardAmount<1||data.referrerRewardAmount>100000000)throw new Error('Invalid targeted reward.');
  if(data.referredRewardAmount!==undefined&&(!Number.isInteger(data.referredRewardAmount)||data.referredRewardAmount<0||data.referredRewardAmount>100000000))throw new Error('Invalid customer reward.');
@@ -36,6 +38,7 @@ export async function reviewTargetedOffer(adminId:string,id:string,decision:'app
  });
 }
 export async function listingRewardSource(tx:Prisma.TransactionClient,userId:string,programId:string,targetedOfferId?:string){
+ const eligible=await tx.program.findUniqueOrThrow({where:{id:programId}});if(!canUseProgram(eligible))throw new Error('This program is unverified or restricted.');
  if(targetedOfferId){const targeted=await tx.targetedReferralOffer.findUniqueOrThrow({where:{id:targetedOfferId}});if(targeted.userId!==userId||targeted.programId!==programId||!targetedOfferValid(targeted)||!targeted.estimatedReferrerValueCents)throw new Error('The targeted offer is unverified, expired, or belongs to another account.');return {valueCents:targeted.estimatedReferrerValueCents,publicOfferId:null,targetedOfferId:targeted.id};}
  const program=await tx.program.findUniqueOrThrow({where:{id:programId},include:{currentPublicOffer:true}});const offer=program.currentPublicOffer;
  if(!offer||offer.reviewStatus!=='VERIFIED'||offer.scopeKey!=='PUBLIC'||offer.active===false||(offer.expiresAt&&offer.expiresAt<=new Date()))throw new Error('A verified current public offer or a verified targeted offer is required.');

@@ -30,8 +30,10 @@ export class GenericOfficialPageMonitor implements ProgramMonitor{
   return observeOfficial(await fetchOfficialSource(source.url,program.officialDomain),program,source,context);
  }
 }
+import { allowSimulation } from '../environment';
 export class DemoProgramMonitor implements ProgramMonitor{
  async check(program:Program,source:ProgramSource):Promise<Observation>{
+  if(!allowSimulation()) throw new Error('UNCONFIGURED: simulated monitoring is disabled.');
   if(!program.isDemo||!source.url.startsWith('demo://'))throw new Error('Demo sources require an explicitly fictional program.');
   const scenario=new URL(source.url).searchParams.get('scenario')||'stable';
   const facts:OfferFacts={scopeKey:'PUBLIC',referrerRewardType:'CASH',referrerRewardAmount:program.referrerRewardCents,referrerRewardCurrency:'USD',estimatedReferrerValueCents:program.referrerRewardCents,qualificationRequirement:program.eligibilityNotes,qualificationDays:program.qualificationDays,countries:program.countries,active:true};
