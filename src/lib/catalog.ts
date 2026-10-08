@@ -1,0 +1,2 @@
+import type { Prisma } from '@prisma/client';
+export function availableListingWhere(now=new Date()):Prisma.ReferralListingWhereInput{return {status:'ACTIVE',availableSlots:{gt:0},referrer:{isSuspended:false},offerType:'STANDARD',AND:[{OR:[{expiresAt:null},{expiresAt:{gt:now}}]},{OR:[{targetedOfferId:null},{targetedOffer:{verificationStatus:'VERIFIED',verificationExpiresAt:{gt:now},OR:[{expiresAt:null},{expiresAt:{gt:now}}]}}]}]};}

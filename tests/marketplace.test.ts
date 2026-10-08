@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  calculateFees, canAccessTransaction, canTransition, canUseProgram,
+  calculateFees, calculateLegacyFees, canAccessTransaction, canTransition, canUseProgram,
   DEFAULT_FEE_CONFIG, isAdmin, isTransactionParticipant, offerScore, safeReferralUrl,
 } from "../src/lib/marketplace";
 
-test("10% success fee yields the disclosed $50 / $5 / $45 breakdown", () => {
-  assert.deepEqual(calculateFees(5000), { bountyCents: 5000, feeCents: 500, netPayoutCents: 4500 });
+test("10% success fee adds to the referrer debit and preserves the full customer bounty", () => {
+  assert.deepEqual(calculateFees(5000), { bountyCents: 5000, feeCents: 500, netPayoutCents: 5000, totalDebitCents: 5500 });
 });
 
 test("fee arithmetic rounds once in integer cents and supports minimum, fixed, maximum", () => {
@@ -15,10 +15,10 @@ test("fee arithmetic rounds once in integer cents and supports minimum, fixed, m
   assert.equal(calculateFees(5000, { percentageBps: 1000, fixedCents: 50, minCents: 100, maxCents: 525 }).feeCents, 525);
   assert.equal(calculateFees(100, { percentageBps: 0, fixedCents: 0, minCents: 25 }).feeCents, 25);
   assert.deepEqual(calculateFees(5, { percentageBps: 1000, fixedCents: 100, minCents: 100 }), {
-    bountyCents: 5, feeCents: 5, netPayoutCents: 0,
+    bountyCents: 5, feeCents: 101, netPayoutCents: 5, totalDebitCents: 106,
   });
   assert.equal(calculateFees(0).netPayoutCents, 0);
-  assert.equal(calculateFees(2_000_000_000, { ...DEFAULT_FEE_CONFIG, percentageBps: 9999 }).feeCents, 1_999_800_000);
+  assert.equal(calculateFees(1_000_000_000, { ...DEFAULT_FEE_CONFIG, percentageBps: 9999 }).feeCents, 999_900_000);
 });
 
 test("invalid monetary inputs and conflicting fee limits cannot reach a ledger", () => {
@@ -102,4 +102,8 @@ test("ranking rewards proven funded offers above an oversized unproven promise",
   const unproven = offerScore({ bountyCents: 100000, reliability: 0, completedReferrals: 0, rating: 0, isFunded: false });
   assert.ok(trusted > unproven);
   assert.ok(Number.isFinite(offerScore({ bountyCents: NaN, reliability: Infinity, completedReferrals: -1, rating: -1, isFunded: false })));
+});
+
+test("historical wallet referrals retain their original fee contract", () => {
+ assert.deepEqual(calculateLegacyFees(5000), {bountyCents:5000, feeCents:500, netPayoutCents:4500});
 });

@@ -9,6 +9,7 @@ function run(name: string) {
 
 async function main() {
   run("db:migrate");
+  run("catalog:prepare");
   if (process.env.DEMO_BOOTSTRAP_ONCE !== "true") return;
   if (process.env.PAYMENT_MODE !== "demo" || process.env.DEMO_SEED !== "true") {
     throw new Error("One-time demo initialization requires explicit PAYMENT_MODE=demo and DEMO_SEED=true.");
@@ -21,6 +22,7 @@ async function main() {
       return;
     }
     run("db:seed");
+    run("catalog:prepare");
     run("admin:create");
     const admin = await db.user.findUniqueOrThrow({ where: { email: process.env.ADMIN_EMAIL!.trim().toLowerCase() } });
     if (admin.role !== "ADMIN") throw new Error("Administrator bootstrap was not confirmed.");

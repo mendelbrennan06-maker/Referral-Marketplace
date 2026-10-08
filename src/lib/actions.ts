@@ -9,13 +9,20 @@ import { isRedirectError } from 'next/dist/client/components/redirect-error';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { db } from '@/lib/db';
+import { acceptListing } from '@/lib/referral-service';
+import { createRequest,submitBid,acceptBid,closeRequest,withdrawBid } from '@/lib/requests';
 import { assertSameOrigin, createSession, hashToken, requireAdmin, requireUser, SESSION_COOKIE } from '@/lib/auth';
 import { rateLimit, requestIdentity } from '@/lib/rate-limit';
 import { calculateFees, canUseProgram, safeReferralUrl, canTransition } from '@/lib/marketplace';
 import { createTestDepositCheckout } from '@/lib/payments';
+import { configuredProvider } from '@/lib/payment-providers';
+import { connectPaymentMethod, authorizePaymentMethod, disconnectPaymentMethod, adminPaymentOperation, verifyReferral, paymentAudit, pausePaymentForDispute, resumeDisputedPayment, type AdminPaymentOperation } from '@/lib/payment-service';
 import { isDemoMode } from '@/lib/config';
 import type { ActionState } from '@/lib/types';
 
+import { submitTargetedOffer,reviewTargetedOffer,listingRewardSource } from '@/lib/targeted-offers';
+import { factsSchema } from '@/lib/monitoring/policy';
+import { runDailyMonitoring,publishOffer } from '@/lib/monitoring/service';
 type Tx = Prisma.TransactionClient;
 function input(data: FormData, name: string, max = 5000) {
   const value = data.get(name);
@@ -141,7 +148,7 @@ export async function createListingAction(_state: ActionState, data: FormData) {
     if (!program || !canUseProgram(program)) throw new Error('Marketplace offers are currently disabled for this program until its terms permit bounty sharing.');
     const referralUrl = safeReferralUrl(input(data, 'referralUrl', 2048), program.officialDomain);
     if (!referralUrl) throw new Error('Use an HTTPS referral URL on the program’s approved domain.');
-    const referrerRewardCents = money(data, 'expectedReward');
+    let referrerRewardCents = money(data, 'expectedReward');
     const bountyCents = money(data, 'bounty');
     if (bountyCents < 100 || bountyCents > referrerRewardCents) throw new Error('Offer at least $1 and no more than the reward you expect.');
     const slots = integer(data, 'slots', 1, 500);
@@ -155,13 +162,22 @@ export async function createListingAction(_state: ActionState, data: FormData) {
     const fee = await db.feeSetting.findUnique({ where: { id: 'global' } });
     if (!fee) throw new Error('Marketplace fees are not configured yet.');
     const breakdown = calculateFees(bountyCents, fee);
-    if (breakdown.netPayoutCents <= 0) throw new Error('The offer must exceed the marketplace fee.');
-    await db.referralListing.create({ data: {
-      referrerId: user.id, programId, referralUrl, referralCode: input(data, 'referralCode', 100) || null,
+    if (breakdown.netPayoutCents <= 0) throw new Error('The bounty must be positive.');
+    await serial(async tx=>{
+      const wantsTargeted=input(data,'offerSource',30)==='targeted';let targetedOfferId=input(data,'targetedOfferId',100)||undefined;let publicOfferId:string|null=null;
+      if(wantsTargeted&&!targetedOfferId){
+       const proof=await readEvidence(data);if(!proof)throw new Error('Upload private targeted-offer evidence, or choose an already verified targeted offer.');
+       const type=z.enum(RewardType).parse(input(data,'rewardType',30));const raw=type==='CASH'?referrerRewardCents:integer(data,'targetedRewardUnits',1,100000000);const expires=input(data,'targetedExpiresAt',100);const expiresAt=expires?new Date(expires):null;if(expiresAt&&Number.isNaN(expiresAt.getTime()))throw new Error('Invalid targeted expiration.');
+       const target=await submitTargetedOffer(tx,user.id,{programId,referrerRewardType:type,referrerRewardAmount:raw,qualificationRequirement:input(data,'requirements',2000),expiresAt,evidence:proof});targetedOfferId=target.id;
+      }else{const source=await listingRewardSource(tx,user.id,programId,targetedOfferId);referrerRewardCents=source.valueCents;publicOfferId=source.publicOfferId;if(bountyCents>referrerRewardCents)throw new Error('Bounty exceeds the verified referrer reward value.');}
+      await tx.referralListing.create({ data: {
+      referrerId: user.id, programId, targetedOfferId, publicOfferId, referralUrl, referralCode: input(data, 'referralCode', 100) || null,
       referrerRewardCents, bountyCents, rewardType, totalSlots: slots, availableSlots: slots, expiresAt,
       countries, requirements: input(data, 'requirements'), notes: input(data, 'notes'),
-      status: 'PENDING_APPROVAL', isFunded: (user.wallet?.availableCents || 0) >= bountyCents, isDemo: isDemoMode(),
+      status: 'PENDING_APPROVAL', offerType: 'STANDARD', isFunded: false, isDemo: isDemoMode(),
     } });
+      await paymentAudit(tx,user.id,'LISTING_BOUNTY_CREATED','ReferralListing',programId,{bountyCents,referrerRewardCents,targetedOfferId:targetedOfferId||null});
+    });
     refresh();
     redirect('/dashboard/listings');
   });
@@ -170,35 +186,7 @@ export async function beginReferralAction(_state: ActionState, data: FormData) {
   return action(async () => {
     const user = await requireUser();
     await rateLimit('begin-referral', user.id, 15, 60 * 60_000);
-    const transaction = await serial(async tx => {
-      const listing = await tx.referralListing.findUnique({ where: { id: input(data, 'listingId', 100) }, include: { program: true, referrer: true } });
-      if (!listing || listing.status !== 'ACTIVE' || listing.referrer.isSuspended || listing.availableSlots < 1 || (listing.expiresAt && listing.expiresAt <= new Date()) || !canUseProgram(listing.program)) throw new Error('This offer is no longer available. Please choose another.');
-      if (listing.referrerId === user.id) throw new Error('You cannot use your own referral offer.');
-      if (!listing.approvedReferralUrl || !safeReferralUrl(listing.approvedReferralUrl, listing.program.officialDomain)) throw new Error('This referral link needs an administrator’s approval.');
-      const existing = await tx.referralTransaction.findUnique({ where: { listingId_referredUserId: { listingId: listing.id, referredUserId: user.id } } });
-      if (existing) throw new Error('You already started this offer. Open it from your transactions dashboard.');
-      const fee = await tx.feeSetting.findUnique({ where: { id: 'global' } });
-      if (!fee) throw new Error('Marketplace fees are not configured.');
-      const breakdown = calculateFees(listing.bountyCents, fee);
-      if (breakdown.netPayoutCents <= 0) throw new Error('This offer does not have a positive net bounty.');
-      const wallet = await tx.wallet.findUnique({ where: { userId: listing.referrerId } });
-      const receiver = await tx.wallet.findUnique({ where: { userId: user.id } });
-      if (!wallet || !receiver || wallet.availableCents < listing.bountyCents) throw new Error('This referrer does not have enough funded balance to reserve your bounty. Choose a funded offer.');
-      if (wallet.isDemo !== receiver.isDemo || wallet.isDemo !== isDemoMode()) throw new Error('This balance cannot be used in the current payment mode.');
-      const transaction = await tx.referralTransaction.create({ data: {
-        listingId: listing.id, programId: listing.programId, referrerId: listing.referrerId, referredUserId: user.id,
-        ...breakdown, reservedCents: listing.bountyCents, status: 'PENDING', isDemo: isDemoMode(),
-      } });
-      await tx.referralListing.update({ where: { id: listing.id }, data: { availableSlots: { decrement: 1 } } });
-      await tx.referralListing.updateMany({ where: { referrerId: listing.referrerId, bountyCents: { gt: wallet.availableCents - listing.bountyCents } }, data: { isFunded: false } });
-      await tx.wallet.update({ where: { id: wallet.id }, data: { availableCents: { decrement: listing.bountyCents }, reservedCents: { increment: listing.bountyCents } } });
-      await tx.wallet.update({ where: { id: receiver.id }, data: { pendingCents: { increment: breakdown.netPayoutCents } } });
-      await tx.walletTransaction.create({ data: { walletId: wallet.id, transactionId: transaction.id, type: 'RESERVATION', amountCents: listing.bountyCents, availableDelta: -listing.bountyCents, reservedDelta: listing.bountyCents, pendingDelta: 0, idempotencyKey: `reserve:${transaction.id}`, isDemo: transaction.isDemo, description: 'Bounty reserved for referral' } });
-      await tx.walletTransaction.create({ data: { walletId: receiver.id, transactionId: transaction.id, type: 'BOUNTY_RECEIPT', amountCents: breakdown.netPayoutCents, availableDelta: 0, reservedDelta: 0, pendingDelta: breakdown.netPayoutCents, idempotencyKey: `pending:${transaction.id}`, isDemo: transaction.isDemo, description: 'Conditional referral earning; not withdrawable until paid' } });
-      await tx.transactionStatusHistory.create({ data: { transactionId: transaction.id, toStatus: 'PENDING', actorId: user.id, note: 'Offer accepted and bounty reserved. Fee snapshot agreed.' } });
-      await notify(tx, listing.referrerId, 'Someone chose your referral', 'The bounty is reserved while the referral is completed.', transaction.id);
-      return transaction;
-    });
+    const transaction = await serial(tx=>acceptListing(tx,user.id,input(data,'listingId',100)));
     refresh(transaction.id);
     redirect(`/dashboard/transactions/${transaction.id}`);
   });
@@ -229,8 +217,10 @@ export async function reportCompletionAction(_state: ActionState, data: FormData
       if (record.referredUserId !== user.id) throw new Error('Only the referred customer can report completion.');
       await transition(tx, record, 'SIGNUP_REPORTED', user.id, 'referred', note || 'Customer reported completion.');
       await tx.referralTransaction.update({ where: { id }, data: { completionNote: note } });
-      if (proof) await tx.uploadedEvidence.create({ data: { ...proof, transactionId: id, uploadedById: user.id, isDemo: record.isDemo } });
+      if (proof) {const file=await tx.uploadedEvidence.create({data:{...proof,transactionId:id,uploadedById:user.id,isDemo:record.isDemo}}); await tx.verificationEvidence.create({data:{transactionId:id,submittedByUserId:user.id,type:'FILE',fileId:file.id,fileUrl:`/api/evidence/${file.id}`,description:note}});}
       await transition(tx, record, 'AWAITING_VERIFICATION', user.id, 'referred', 'Submitted for manual administrator verification.');
+      await tx.referralTransaction.update({where:{id},data:{verificationStatus:'PARTY_REPORTED'}});
+      await paymentAudit(tx,user.id,'COMPLETION_REPORTED','ReferralTransaction',id);
       await notify(tx, record.referrerId, 'Referral completion reported', 'Review the customer’s report and confirm completion.', id);
     });
     refresh(id);
@@ -239,19 +229,37 @@ export async function reportCompletionAction(_state: ActionState, data: FormData
 }
 export async function confirmCompletionAction(_state: ActionState, data: FormData) {
   return action(async () => {
-    const user = await requireUser();
-    const id = input(data, 'transactionId', 100);
-    await serial(async tx => {
-      const record = await participant(tx, id, user.id);
-      if (record.referrerId !== user.id) throw new Error('Only the referrer can confirm this referral.');
-      if (!['SIGNUP_REPORTED', 'AWAITING_VERIFICATION'].includes(record.status)) throw new Error('The customer must first report completion.');
-      if (record.referrerConfirmedAt) throw new Error('You already confirmed this referral.');
-      await tx.referralTransaction.update({ where: { id }, data: { referrerConfirmedAt: new Date() } });
-      await tx.transactionStatusHistory.create({ data: { transactionId: id, fromStatus: record.status, toStatus: record.status, actorId: user.id, note: 'Referrer separately confirmed completion.' } });
-      await notify(tx, record.referredUserId, 'Referrer confirmed completion', 'Your referral is awaiting final administrator verification.', id);
+    const user = await requireUser(); const id=input(data,'transactionId',100);
+    const response=z.enum(['CONFIRMED','STILL_PENDING','DID_NOT_TRACK']).parse(input(data,'response',30)||'CONFIRMED');
+    await serial(async tx=>{
+      const record=await participant(tx,id,user.id);
+      if(record.referrerId!==user.id) throw new Error('Only the referrer can respond.');
+      if(!['SIGNUP_REPORTED','AWAITING_VERIFICATION'].includes(record.status)) throw new Error('The customer must first report completion.');
+      if(record.referrerConfirmedAt) throw new Error('This completion is already confirmed.');
+      await tx.referralTransaction.update({where:{id},data:{referrerResponse:response,referrerConfirmedAt:response==='CONFIRMED'?new Date():null,verificationStatus:response==='CONFIRMED'?'READY_FOR_PAYMENT':response==='DID_NOT_TRACK'?'UNDER_REVIEW':'PARTY_REPORTED',...(response==='DID_NOT_TRACK'?{verificationLevel:'LEVEL_2_EVIDENCE_REVIEW' as const}:{})}});
+      await paymentAudit(tx,user.id,'PARTY_RESPONSE','ReferralTransaction',id,{response});
+      await tx.transactionStatusHistory.create({data:{transactionId:id,fromStatus:record.status,toStatus:record.status,actorId:user.id,note:`Referrer response: ${response}.`}});
+      if(response==='CONFIRMED'&&record.paymentModel==='POST_VERIFICATION'&&configuredProvider()==='demo') await verifyReferral(tx,id,user.id,'LEVEL_1_PARTY_CONFIRMATION','BOTH_PARTIES_DEMO','Both participants confirmed completion. Demo obligation created; no funds moved.');
+      await notify(tx,record.referredUserId,response==='CONFIRMED'?'Referrer confirmed completion':'Referrer requested a review',response==='DID_NOT_TRACK'?'Referral did not track. Both parties can upload evidence for administrator review.':response==='STILL_PENDING'?'The referrer reports the external reward is still pending.':'Your confirmation is recorded. Payment requires collection and settlement.',id);
     });
-    refresh(id); return { success: 'Completion confirmed. Final verification remains with an administrator.' };
+    refresh(id);return {success:response==='CONFIRMED'?'Completion confirmed. Demo referrals create a payment obligation automatically.':'Response recorded. You can submit private evidence for review.'};
   });
+}
+export async function submitVerificationEvidenceAction(_state:ActionState,data:FormData) {
+ return action(async()=>{
+  const user=await requireUser();const id=input(data,'transactionId',100);await rateLimit('evidence',user.id,15,60*60_000);
+  const r=await db.referralTransaction.findUnique({where:{id}});
+  if(!r||![r.referrerId,r.referredUserId].includes(user.id)) throw new Error('Transaction not found.');
+  const description=z.string().min(10).max(3000).parse(input(data,'description',3000));const proof=await readEvidence(data);
+  await serial(async tx=>{
+   const record=await participant(tx,id,user.id);
+   if(!['SIGNUP_REPORTED','AWAITING_VERIFICATION','DISPUTED'].includes(record.status)) throw new Error('Evidence is only accepted during an active completion review.');
+   const file=proof?await tx.uploadedEvidence.create({data:{...proof,transactionId:id,uploadedById:user.id,isDemo:record.isDemo}}):null;
+   await tx.verificationEvidence.create({data:{transactionId:id,submittedByUserId:user.id,type:file?'FILE':'NOTE',fileId:file?.id,fileUrl:file?`/api/evidence/${file.id}`:null,description}});
+   await tx.referralTransaction.update({where:{id},data:{verificationLevel:'LEVEL_2_EVIDENCE_REVIEW',verificationStatus:record.status==='DISPUTED'?'DISPUTED':'UNDER_REVIEW'}});
+   await paymentAudit(tx,user.id,'EVIDENCE_SUBMITTED','ReferralTransaction',id);
+  });refresh(id);return {success:'Private evidence submitted for administrator review.'};
+ });
 }
 export async function sendMessageAction(_state: ActionState, data: FormData) {
   return action(async () => {
@@ -282,6 +290,9 @@ export async function openDisputeAction(_state: ActionState, data: FormData) {
       const record = await participant(tx, id, user.id);
       if (await tx.dispute.findFirst({ where: { transactionId: id, status: 'OPEN' } })) throw new Error('This transaction already has an open dispute.');
       await transition(tx, record, 'DISPUTED', user.id, record.referrerId === user.id ? 'referrer' : 'referred', description);
+      await pausePaymentForDispute(tx,id,user.id);
+      await tx.referralTransaction.update({where:{id},data:{verificationStatus:'DISPUTED',verificationLevel:'LEVEL_2_EVIDENCE_REVIEW'}});
+      await paymentAudit(tx,user.id,'VERIFICATION_DISPUTED','ReferralTransaction',id);
       await tx.dispute.create({ data: { transactionId: id, openedById: user.id, reason, details: description, isDemo: record.isDemo } });
       await notify(tx, record.referrerId === user.id ? record.referredUserId : record.referrerId, 'Dispute opened', 'An administrator will review the transaction, messages and evidence.', id);
     });
@@ -384,9 +395,21 @@ export async function adminVerifyAction(_state: ActionState, data: FormData) {
     const id = input(data, 'transactionId', 100);
     const decision = input(data, 'decision', 20);
     const note = input(data, 'note', 5000);
-    if (!['approve', 'reject'].includes(decision)) throw new Error('Choose approve or reject.');
+    if (!['approve', 'reject', 'request_more_info'].includes(decision)) throw new Error('Choose verify, reject or request more information.');
     await serial(async tx => {
       const record = await participant(tx, id, admin.id, true);
+      if(record.paymentModel==='POST_VERIFICATION') {
+        if(!['AWAITING_VERIFICATION','SIGNUP_REPORTED'].includes(record.status)) throw new Error('Use the dispute console to resolve disputed referrals.');
+        if(decision==='approve') {await verifyReferral(tx,id,admin.id,'LEVEL_2_EVIDENCE_REVIEW','ADMIN_EVIDENCE_REVIEW',note);await tx.verificationEvidence.updateMany({where:{transactionId:id},data:{reviewStatus:'ACCEPTED'}});}
+        else if(decision==='request_more_info') {
+          await tx.referralTransaction.update({where:{id},data:{verificationStatus:'MORE_INFO_REQUIRED',verificationLevel:'LEVEL_2_EVIDENCE_REVIEW',adminNotes:note}});
+          await tx.verificationEvidence.updateMany({where:{transactionId:id,reviewStatus:'PENDING'},data:{reviewStatus:'MORE_INFO_REQUIRED'}});
+          await notify(tx,record.referrerId,'Evidence requested',note,id);await notify(tx,record.referredUserId,'Evidence requested',note,id);
+        } else {await transition(tx,record,'REJECTED',admin.id,'admin',note);await tx.referralTransaction.update({where:{id},data:{verificationStatus:'REJECTED',adminNotes:note}});await tx.verificationEvidence.updateMany({where:{transactionId:id},data:{reviewStatus:'REJECTED'}});await notify(tx,record.referredUserId,'Verification rejected',note,id);}
+        await paymentAudit(tx,admin.id,`VERIFICATION_${decision.toUpperCase()}`,'ReferralTransaction',id,{note});
+        await audit(tx,admin.id,`VERIFICATION_${decision.toUpperCase()}`,'ReferralTransaction',id,{note});return;
+      }
+      if(decision==='request_more_info') {await notify(tx,record.referredUserId,'Evidence requested',note,id);await audit(tx,admin.id,'EVIDENCE_REQUESTED','ReferralTransaction',id,{note});return;}
       if (decision === 'approve') {
         if (!record.referrerConfirmedAt) throw new Error('The referrer must confirm completion before final verification.');
         if (record.reservedCents !== record.bountyCents) throw new Error('The full bounty is not reserved.');
@@ -421,6 +444,7 @@ export async function adminListingAction(_state: ActionState, data: FormData) {
       const listing = await tx.referralListing.findUnique({ where: { id }, include: { program: true, referrer: true } });
       if (!listing) throw new Error('Listing not found.');
       const approved = safeReferralUrl(listing.referralUrl, listing.program.officialDomain);
+      if(status==='ACTIVE')await listingRewardSource(tx,listing.referrerId,listing.programId,listing.targetedOfferId||undefined);
       if (status === 'ACTIVE' && (!canUseProgram(listing.program) || !approved || listing.referrer.isSuspended)) throw new Error('This listing cannot be approved because its program, URL or owner is restricted.');
       await tx.referralListing.update({ where: { id }, data: { status, approvedReferralUrl: status === 'ACTIVE' ? approved : listing.approvedReferralUrl } });
       await audit(tx, admin.id, `LISTING_${status}`, 'ReferralListing', id);
@@ -525,7 +549,12 @@ export async function adminResolveDisputeAction(_state: ActionState, data: FormD
       const record = await participant(tx, dispute.transactionId, admin.id, true);
       transactionId = record.id;
       if (record.status !== 'DISPUTED') throw new Error('The transaction is no longer disputed.');
-      if (resolution === 'pay') {
+      await resumeDisputedPayment(tx,record.id,admin.id,resolution==='pay');
+      if(record.paymentModel==='POST_VERIFICATION') {
+        if(resolution==='pay') {await verifyReferral(tx,record.id,admin.id,'LEVEL_2_EVIDENCE_REVIEW','ADMIN_DISPUTE_RESOLUTION',note);await tx.verificationEvidence.updateMany({where:{transactionId:record.id},data:{reviewStatus:'ACCEPTED'}});}
+        else {await transition(tx,record,resolution==='cancel'?'CANCELLED':'REJECTED',admin.id,'admin',note);await tx.referralTransaction.update({where:{id:record.id},data:{verificationStatus:'REJECTED'}});}
+        await paymentAudit(tx,admin.id,'DISPUTE_RESOLVED','ReferralTransaction',record.id,{resolution,note});
+      } else if (resolution === 'pay') {
         await transition(tx, record, 'VERIFIED', admin.id, 'admin', note);
         await transition(tx, record, 'PAYOUT_PENDING', admin.id, 'admin', 'Dispute resolved for the customer; awaiting payout.');
       } else {
@@ -596,3 +625,109 @@ export async function userListingAction(_state: ActionState, data: FormData) {
     refresh(); revalidatePath('/admin/listings'); return { success: status === 'DISABLED' ? 'Listing disabled. Existing bounty reservations remain in place.' : 'Listing submitted for administrator review.' };
   });
 }
+
+export async function paymentMethodAction(_state:ActionState,data:FormData) {
+ return action(async()=>{
+  const user=await requireUser();await rateLimit('payment-method',user.id,10,60*60_000);
+  if(input(data,'operation',20)==='disconnect') await disconnectPaymentMethod(user.id,input(data,'methodId',100)); else await connectPaymentMethod(user.id);
+  revalidatePath('/dashboard/payments');revalidatePath('/dashboard/settings');return {success:'Payment method record updated. No bank or card details were collected.'};
+ });
+}
+export async function paymentAuthorizationAction(_state:ActionState,data:FormData) {
+ return action(async()=>{
+  const user=await requireUser();if(!checked(data,'consent')) throw new Error('Read and explicitly accept the payment terms.');
+  const scope=z.enum(['ONE_TIME','LISTING_SPECIFIC','MARKETPLACE_BOUNTIES']).parse(input(data,'scope',40)||'MARKETPLACE_BOUNTIES');
+  await authorizePaymentMethod(user.id,input(data,'methodId',100),scope,input(data,'targetId',100)||undefined);
+  revalidatePath('/dashboard/payments');return {success:'Consent recorded. Demo consent is simulated; manual consent is not a real ACH mandate.'};
+ });
+}
+export async function adminPaymentAction(_state:ActionState,data:FormData) {
+ return action(async()=>{
+  const admin=await requireAdmin();await rateLimit('payment-admin',admin.id,100,60*60_000);
+  const id=input(data,'obligationId',100);const operation=z.enum(['start_debit','debit_success','debit_failure','funds_available','start_payout','payout_paid','retry','refund','cancel','adjustment']).parse(input(data,'operation',30));
+  await adminPaymentOperation(admin.id,id,operation as AdminPaymentOperation,input(data,'reference',150),input(data,'note',2000),checked(data,'recoveryConfirmed'),operation==='adjustment'?{amountCents:money(data,'amount'),userId:input(data,'userId',100),key:input(data,'adjustmentKey',100)}:undefined);
+  refresh();revalidatePath('/dashboard/payments');return {success:'Payment operation recorded with audit history. No payment API was contacted.'};
+ });
+}
+export async function demoRewardMatchAction(_state:ActionState,data:FormData) {
+ return action(async()=>{
+  const admin=await requireAdmin();if(configuredProvider()!=='demo') throw new Error('Reward signal simulations require demo mode.');const id=input(data,'transactionId',100);
+  await serial(async tx=>{
+   const r=await participant(tx,id,admin.id,true);
+   await tx.possibleRewardMatch.upsert({where:{provider_externalTransactionId:{provider:'demo',externalTransactionId:`demo-reward:${id}`}},update:{},create:{userId:r.referrerId,referralTransactionId:id,provider:'demo',externalTransactionId:`demo-reward:${id}`,merchantName:r.program.name,amountCents:r.listing.referrerRewardCents,date:new Date(),confidence:70}});
+   await tx.externalVerificationEvent.upsert({where:{provider_externalEventId:{provider:'demo',externalEventId:`demo-partner:${id}`}},update:{},create:{programId:r.programId,referralTransactionId:id,provider:'demo',externalEventId:`demo-partner:${id}`,eventType:'MOCK_CONVERSION_SIGNAL',payload:{simulated:true},verified:false}});
+   await audit(tx,admin.id,'DEMO_VERIFICATION_SIGNAL','ReferralTransaction',id);await paymentAudit(tx,admin.id,'POSSIBLE_REWARD_SIGNAL','ReferralTransaction',id,{finalProof:false});
+  });refresh(id);return {success:'Demo signals recorded. They do not verify the referral or trigger payment.'};
+ });
+}
+export async function rewardMatchResponseAction(_state:ActionState,data:FormData) {
+ return action(async()=>{
+  const user=await requireUser();const id=input(data,'matchId',100);const status=z.enum(['USER_CONFIRMED','USER_REJECTED']).parse(input(data,'status',30));
+  await serial(async tx=>{const match=await tx.possibleRewardMatch.findUnique({where:{id}});if(!match||match.userId!==user.id||match.status!=='POSSIBLE_MATCH') throw new Error('Reward match unavailable.');await tx.possibleRewardMatch.update({where:{id},data:{status}});await paymentAudit(tx,user.id,'REWARD_MATCH_RESPONSE','PossibleRewardMatch',id,{status});});refresh();return {success:'Reward signal response recorded. It is not final verification.'};
+ });
+}
+
+export async function targetedOfferSubmitAction(_state:ActionState,data:FormData){
+ return action(async()=>{
+  const user=await requireUser();await rateLimit('targeted-offer',user.id,10,60*60_000);
+  const proof=await readEvidence(data);if(!proof)throw new Error('Upload private proof of your targeted offer.');
+  const type=z.enum(RewardType).parse(input(data,'referrerRewardType',30));
+  const amount=type==='CASH'?money(data,'referrerRewardAmount'):integer(data,'referrerRewardAmount',1,100000000);
+  const referredType=z.enum(RewardType).parse(input(data,'referredRewardType',30)||'CASH');
+  const referredRaw=input(data,'referredRewardAmount',20);const referredAmount=referredRaw?(referredType==='CASH'?money(data,'referredRewardAmount'):integer(data,'referredRewardAmount',0,100000000)):undefined;
+  const expires=input(data,'targetedExpiresAt',100);const expiresAt=expires?new Date(expires):null;if(expiresAt&&Number.isNaN(expiresAt.getTime()))throw new Error('Invalid targeted expiration.');
+  await serial(tx=>submitTargetedOffer(tx,user.id,{programId:input(data,'programId',100),referrerRewardType:type,referrerRewardAmount:amount,referredRewardType:referredAmount!==undefined?referredType:undefined,referredRewardAmount:referredAmount,qualificationRequirement:z.string().min(10).max(2000).parse(input(data,'qualificationRequirement',2000)),expiresAt,notes:input(data,'targetedNotes',2000),evidence:proof}));
+  revalidatePath('/dashboard/targeted-offers');revalidatePath('/admin');return {success:'Targeted offer submitted privately. It does not change the public offer.'};
+ });
+}
+export async function adminTargetedOfferAction(_state:ActionState,data:FormData){
+ return action(async()=>{
+  const admin=await requireAdmin();const decision=z.enum(['approve','reject']).parse(input(data,'decision',20));
+  await reviewTargetedOffer(admin.id,input(data,'targetedOfferId',100),decision,input(data,'note',2000),input(data,'estimatedValue',20)?money(data,'estimatedValue'):undefined);
+  refresh();revalidatePath('/dashboard/targeted-offers');return {success:'Targeted offer reviewed. Public program rewards were preserved.'};
+ });
+}
+export async function adminMonitoringAction(_state:ActionState,data:FormData){
+ return action(async()=>{
+  const admin=await requireAdmin();const operation=z.enum(['run','configure','source','source_unreliable','review']).parse(input(data,'operation',30));const programId=input(data,'programId',100);
+  if(operation==='run'){
+   await rateLimit('monitor-manual',admin.id,6,60*60_000);
+   const result=await runDailyMonitoring({manual:true,programId:programId||undefined,limit:20});
+   await db.adminAction.create({data:{adminId:admin.id,action:'MONITOR_RUN_REQUESTED',entityType:'MonitoringRun',entityId:'id' in result?result.id:'already-running',details:{manual:true}}});
+   revalidatePath('/admin');return {success:'duplicate' in result?'A monitoring job is already running or was already dispatched.':'Monitoring batch finished. Review recorded failures and detected changes.'};
+  }
+  await serial(async tx=>{
+   const program=await tx.program.findUniqueOrThrow({where:{id:programId}});
+   if(operation==='configure')await tx.program.update({where:{id:programId},data:{monitoringEnabled:checked(data,'monitoringEnabled'),monitoringFrequencyHours:integer(data,'frequencyHours',1,720),monitoringPriority:z.enum(['HIGH','NORMAL','LOW']).parse(input(data,'priority',10)),nextCheckAt:new Date()}});
+   if(operation==='source'){
+    const url=input(data,'sourceUrl',2048);const type=z.enum(['OFFICIAL_REFERRAL_PAGE','OFFICIAL_TERMS','OFFICIAL_HELP_PAGE','API','PARTNER_FEED','ADMIN_SOURCE','OTHER']).parse(input(data,'sourceType',40));
+    if(!safeReferralUrl(url,program.officialDomain))throw new Error('Use an HTTPS URL on this program’s official domain. Cross-host partner feeds require a future approved adapter.');
+    const sourceId=input(data,'sourceId',100);
+    const values={url,sourceType:type,priority:integer(data,'sourcePriority',1,100),requiresAuthentication:checked(data,'requiresAuthentication'),active:true,adapter:'generic',notes:input(data,'sourceNotes',1000)};
+    if(sourceId){const source=await tx.programSource.findUniqueOrThrow({where:{id:sourceId}});if(source.programId!==programId)throw new Error('Source not found.');await tx.programSource.update({where:{id:sourceId},data:values});}else await tx.programSource.upsert({where:{programId_url:{programId,url}},create:{programId,...values},update:values});
+    await tx.program.update({where:{id:programId},data:{nextCheckAt:new Date()}});
+   }
+   if(operation==='source_unreliable'){const source=await tx.programSource.findUniqueOrThrow({where:{id:input(data,'sourceId',100)}});if(source.programId!==programId)throw new Error('Source not found.');await tx.programSource.update({where:{id:source.id},data:{active:false,lastStatus:'UNRELIABLE',notes:input(data,'note',1000)}});}
+   if(operation==='review'){
+    const review=await tx.monitoringReview.findUniqueOrThrow({where:{id:input(data,'reviewId',100)},include:{change:{include:{newOffer:true}}}});if(review.programId!==programId||review.status!=='PENDING')throw new Error('Review is unavailable.');
+    const decision=z.enum(['approve','reject']).parse(input(data,'decision',20));const edited=input(data,'correctedData',8000);let corrected:Prisma.InputJsonValue|undefined;
+    if(review.targetedOfferId)throw new Error('Use the private targeted-offer review controls.');
+    const candidate=review.change?.newOffer;
+    if(decision==='approve'&&candidate){let offer=candidate;if(edited){const facts=factsSchema.parse(JSON.parse(edited));const base={...candidate};for(const key of ['id','detectedAt','validUntil','verifiedAt','verificationMethod','isCurrent'] as const)Reflect.deleteProperty(base,key);const {expiresAt,...values}=facts;offer=await tx.programOffer.create({data:{...base,...values,expiresAt:expiresAt===undefined?candidate.expiresAt:expiresAt?new Date(expiresAt):null,validFrom:new Date(),isCurrent:false,reviewStatus:'PENDING_REVIEW'}});await tx.programOffer.update({where:{id:candidate.id},data:{reviewStatus:'REJECTED'}});await tx.programOfferChange.create({data:{programId,previousOfferId:candidate.id,newOfferId:offer.id,changeType:'OTHER',confidence:'HIGH',reviewStatus:'VERIFIED',sourceUrl:candidate.sourceUrl,details:{adminCorrection:true}}});corrected=facts as Prisma.InputJsonValue;}
+     if(offer.officialReferralUrl&&!safeReferralUrl(offer.officialReferralUrl,program.officialDomain))throw new Error('Corrected referral URL must remain on the approved official domain.');
+     await publishOffer(tx,offer,'ADMIN_SOURCE_REVIEW',admin.id);
+    }else if(candidate&&decision==='reject')await tx.programOffer.update({where:{id:candidate.id},data:{reviewStatus:'REJECTED'}});
+    if(review.changeId)await tx.programOfferChange.update({where:{id:review.changeId},data:{reviewStatus:decision==='approve'?'VERIFIED':'REJECTED'}});
+    await tx.monitoringReview.update({where:{id:review.id},data:{status:decision==='approve'?'APPROVED':'REJECTED',reviewedById:admin.id,reviewedAt:new Date(),correctedData:corrected}});
+   }
+   await audit(tx,admin.id,`MONITOR_${operation.toUpperCase()}`,'Program',programId);
+   await paymentAudit(tx,admin.id,`MONITOR_${operation.toUpperCase()}`,'Program',programId);
+  });refresh();revalidatePath('/admin');revalidatePath('/referral/[slug]','page');return {success:'Monitoring configuration/review saved with audit history.'};
+ });
+}
+
+export async function requestOfferAction(_state:ActionState,data:FormData){return action(async()=>{const user=await requireUser();await rateLimit('request-offer',user.id,10,3600000);const expiresAt=new Date(input(data,'expiresAt',100));const request=await createRequest(user.id,input(data,'programId',100),money(data,'desiredBonus'),input(data,'notes',2000),expiresAt);revalidatePath('/requests');redirect(`/requests/${request.id}`);});}
+export async function bidOfferAction(_state:ActionState,data:FormData){return action(async()=>{const user=await requireUser();await rateLimit('bid-offer',user.id,30,3600000);const id=input(data,'requestId',100);await submitBid(user.id,id,input(data,'listingId',100),money(data,'bonus'),input(data,'message',2000));revalidatePath(`/requests/${id}`);revalidatePath('/dashboard/requests');return {success:'Offer submitted. Payment is collected after successful referral verification.'};});}
+export async function acceptBidAction(_state:ActionState,data:FormData){return action(async()=>{const user=await requireUser();await rateLimit('accept-bid',user.id,15,3600000);const r=await acceptBid(user.id,input(data,'bidId',100));refresh(r.id);revalidatePath('/requests');revalidatePath('/dashboard/requests');redirect(`/dashboard/transactions/${r.id}`);});}
+export async function requestControlAction(_state:ActionState,data:FormData){return action(async()=>{const user=await requireUser();if(input(data,'operation',20)==='withdraw')await withdrawBid(user.id,input(data,'bidId',100));else await closeRequest(user.id,input(data,'requestId',100));revalidatePath('/requests','layout');revalidatePath('/dashboard/requests');return {success:'Request or bid updated.'};});}
+export async function editListingBountyAction(_state:ActionState,data:FormData){return action(async()=>{const user=await requireUser();const id=input(data,'listingId',100);const cents=money(data,'bounty');await serial(async tx=>{const l=await tx.referralListing.findUnique({where:{id}});if(!l||l.referrerId!==user.id)throw new Error('Listing not found.');const reward=await listingRewardSource(tx,user.id,l.programId,l.targetedOfferId||undefined);if(cents<100||cents>reward.valueCents)throw new Error('Bounty must fit the verified reward and be at least $1.');await tx.referralListing.update({where:{id},data:{bountyCents:cents}});await paymentAudit(tx,user.id,'LISTING_BOUNTY_CHANGED','ReferralListing',id,{previous:l.bountyCents,next:cents});});refresh();return {success:'Bounty updated. Accepted transactions and submitted bids retain their agreed amounts.'};});}

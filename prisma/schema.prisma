@@ -90,6 +90,24 @@ model User {
   isDemo             Boolean                    @default(false)
   createdAt          DateTime                   @default(now())
   updatedAt          DateTime                   @updatedAt
+  trustTier          TrustTier @default(NEW)
+  failedPaymentCount Int @default(0)
+  latePaymentCount Int @default(0)
+  successfulPaymentCount Int @default(0)
+  referralRequests ReferralRequest[]
+  referralBids ReferralBid[]
+  targetedOffers TargetedReferralOffer[]
+  monitoringReviews MonitoringReview[]
+  programFollows ProgramFollow[]
+  paymentMethods PaymentMethod[]
+  paymentAuthorizations PaymentAuthorization[]
+  obligationsOwed PaymentObligation[] @relation("ObligationPayer")
+  obligationsReceived PaymentObligation[] @relation("ObligationPayee")
+  verificationEvidence VerificationEvidence[]
+  verifiedTransactions ReferralTransaction[] @relation("VerificationActor")
+  paymentAudits PaymentAudit[]
+  ledgerEntries LedgerEntry[]
+  rewardMatches PossibleRewardMatch[]
   profile            Profile?
   sessions           Session[]
   wallet             Wallet?
@@ -184,6 +202,27 @@ model Program {
   createdAt                    DateTime               @default(now())
   updatedAt                    DateTime               @updatedAt
   category                     Category               @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  referralRequests ReferralRequest[]
+  catalogActive Boolean @default(true)
+  monitoringEnabled Boolean @default(true)
+  monitoringFrequencyHours Int @default(24)
+  monitoringPriority MonitoringPriority @default(NORMAL)
+  lastCheckedAt DateTime?
+  nextCheckAt DateTime @default(now())
+  lastSuccessfulCheckAt DateTime?
+  consecutiveFailures Int @default(0)
+  monitoringLeaseUntil DateTime?
+  currentPublicOfferId String? @unique
+  currentPublicOffer ProgramOffer? @relation("CurrentPublicOffer",fields:[currentPublicOfferId],references:[id],onDelete:Restrict)
+  offers ProgramOffer[] @relation("ProgramOffers")
+  variants ProgramOfferVariant[]
+  sources ProgramSource[]
+  offerChanges ProgramOfferChange[]
+  termsSnapshots ProgramTermsSnapshot[]
+  monitoringReviews MonitoringReview[]
+  targetedOffers TargetedReferralOffer[]
+  followers ProgramFollow[]
+  externalEvents ExternalVerificationEvent[]
   listings                     ReferralListing[]
   transactions                 ReferralTransaction[]
   clicks                       ReferralClick[]
@@ -212,6 +251,13 @@ model ReferralListing {
   requirements        String                @default("")
   notes               String                @default("")
   status              ListingStatus         @default(PENDING_APPROVAL)
+  publicOfferId String?
+  publicOffer ProgramOffer? @relation(fields:[publicOfferId],references:[id],onDelete:Restrict)
+  targetedOfferId String?
+  targetedOffer TargetedReferralOffer? @relation(fields:[targetedOfferId],references:[id],onDelete:Restrict)
+  offerType OfferType @default(STANDARD)
+  bids ReferralBid[]
+  authorizations PaymentAuthorization[]
   isFunded            Boolean               @default(false)
   isDemo              Boolean               @default(false)
   createdAt           DateTime              @default(now())
@@ -233,6 +279,23 @@ model ReferralTransaction {
   programId           String
   referrerId          String
   referredUserId      String
+  acceptedBid ReferralBid?
+  paymentProvider String @default("demo")
+  paymentModel PaymentModel @default(POST_VERIFICATION)
+  totalDebitCents Int @default(0)
+  verificationLevel VerificationLevel @default(LEVEL_1_PARTY_CONFIRMATION)
+  verificationStatus VerificationStatus @default(PENDING)
+  verificationMethod String?
+  verifiedAt DateTime?
+  verifiedById String?
+  verificationConfidence Int?
+  referrerResponse PartyResponse?
+  verifiedBy User? @relation("VerificationActor", fields:[verifiedById],references:[id],onDelete:SetNull)
+  paymentObligation PaymentObligation?
+  verificationEvidence VerificationEvidence[]
+  rewardMatches PossibleRewardMatch[]
+  externalEvents ExternalVerificationEvent[]
+  authorizations PaymentAuthorization[]
   bountyCents         Int
   feeCents            Int
   netPayoutCents      Int
@@ -516,6 +579,7 @@ model UploadedEvidence {
   data          Bytes
   isDemo        Boolean             @default(false)
   createdAt     DateTime            @default(now())
+  verificationEvidence VerificationEvidence?
   transaction   ReferralTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
   uploadedBy    User                @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
 
@@ -543,4 +607,585 @@ model RateLimitBucket {
   updatedAt DateTime @updatedAt
 
   @@index([resetAt])
+}
+
+
+enum OfferType {
+  STANDARD
+  GUARANTEED
+}
+enum PaymentModel {
+  LEGACY_WALLET
+  POST_VERIFICATION
+}
+enum TrustTier {
+  NEW
+  ESTABLISHED
+  TRUSTED
+  HIGH_TRUST
+}
+enum PaymentMethodStatus {
+  PENDING
+  VERIFIED
+  AUTHORIZED
+  FAILED
+  DISCONNECTED
+}
+enum AuthorizationStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+enum AuthorizationScope {
+  ONE_TIME
+  LISTING_SPECIFIC
+  MARKETPLACE_BOUNTIES
+}
+enum ObligationStatus {
+  CREATED
+  AUTHORIZED
+  DEBIT_PENDING
+  DEBIT_PROCESSING
+  DEBIT_SUCCEEDED
+  DEBIT_FAILED
+  FUNDS_PENDING
+  FUNDS_AVAILABLE
+  PAYOUT_PENDING
+  PAYOUT_PROCESSING
+  PAID
+  REFUNDED
+  CANCELLED
+  DISPUTED
+}
+enum VerificationLevel {
+  LEVEL_1_PARTY_CONFIRMATION
+  LEVEL_2_EVIDENCE_REVIEW
+  LEVEL_3_PAYMENT_ASSISTED
+  LEVEL_4_API_VERIFIED
+}
+enum VerificationStatus {
+  PENDING
+  PARTY_REPORTED
+  READY_FOR_PAYMENT
+  UNDER_REVIEW
+  MORE_INFO_REQUIRED
+  VERIFIED
+  REJECTED
+  DISPUTED
+}
+enum PartyResponse {
+  CONFIRMED
+  STILL_PENDING
+  DID_NOT_TRACK
+}
+enum EvidenceReviewStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  MORE_INFO_REQUIRED
+}
+enum RewardMatchStatus {
+  POSSIBLE_MATCH
+  USER_CONFIRMED
+  USER_REJECTED
+  ADMIN_CONFIRMED
+}
+enum PaymentLedgerType {
+  DEBIT
+  CREDIT
+  PLATFORM_FEE
+  BOUNTY
+  REFUND
+  REVERSAL
+  PAYOUT
+  ADJUSTMENT
+}
+
+model PaymentMethod {
+  id String @id @default(cuid())
+  userId String
+  provider String
+  providerCustomerId String?
+  providerPaymentMethodId String @unique
+  type String
+  bankName String?
+  last4 String?
+  status PaymentMethodStatus @default(PENDING)
+  authorizationStatus AuthorizationStatus @default(PENDING)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  authorizations PaymentAuthorization[]
+  obligations PaymentObligation[]
+  @@index([userId,provider,status])
+}
+model PaymentAuthorization {
+  id String @id @default(cuid())
+  userId String
+  paymentMethodId String
+  authorizationType String
+  scope AuthorizationScope
+  listingId String?
+  transactionId String?
+  acceptedAt DateTime @default(now())
+  ipAddress String?
+  userAgent String?
+  termsVersion String
+  status AuthorizationStatus @default(ACTIVE)
+  usedAt DateTime?
+  revokedAt DateTime?
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  method PaymentMethod @relation(fields:[paymentMethodId],references:[id],onDelete:Restrict)
+  listing ReferralListing? @relation(fields:[listingId],references:[id],onDelete:Restrict)
+  transaction ReferralTransaction? @relation(fields:[transactionId],references:[id],onDelete:Restrict)
+  obligations PaymentObligation[]
+  @@index([userId,status])
+}
+model PaymentObligation {
+  id String @id @default(cuid())
+  referralTransactionId String @unique
+  payerUserId String
+  payeeUserId String
+  bountyCents Int
+  feeCents Int
+  totalDebitCents Int
+  currency String @default("USD")
+  provider String
+  isDemo Boolean @default(false)
+  status ObligationStatus @default(CREATED)
+  paymentMethodId String?
+  authorizationId String?
+  debitReference String? @unique
+  payoutReference String? @unique
+  refundReference String? @unique
+  failedAttempts Int @default(0)
+  dueAt DateTime
+  lateRecordedAt DateTime?
+  disputedFromStatus ObligationStatus?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  transaction ReferralTransaction @relation(fields:[referralTransactionId],references:[id],onDelete:Restrict)
+  payer User @relation("ObligationPayer",fields:[payerUserId],references:[id],onDelete:Restrict)
+  payee User @relation("ObligationPayee",fields:[payeeUserId],references:[id],onDelete:Restrict)
+  method PaymentMethod? @relation(fields:[paymentMethodId],references:[id],onDelete:Restrict)
+  authorization PaymentAuthorization? @relation(fields:[authorizationId],references:[id],onDelete:Restrict)
+  attempts PaymentAttempt[]
+  ledger LedgerEntry[]
+  events PaymentProviderEvent[]
+  @@index([status,createdAt])
+  @@index([payerUserId,status])
+  @@index([payeeUserId,status])
+}
+model PaymentAttempt {
+  id String @id @default(cuid())
+  obligationId String
+  operation String
+  attemptNumber Int
+  idempotencyKey String @unique
+  providerReference String? @unique
+  status String @default("PENDING")
+  failureReason String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  obligation PaymentObligation @relation(fields:[obligationId],references:[id],onDelete:Restrict)
+  @@unique([obligationId,operation,attemptNumber])
+}
+model LedgerEntry {
+  id String @id @default(cuid())
+  obligationId String?
+  userId String?
+  type PaymentLedgerType
+  account String
+  amountCents Int
+  currency String @default("USD")
+  journalKey String
+  idempotencyKey String @unique
+  description String
+  isDemo Boolean @default(false)
+  createdAt DateTime @default(now())
+  obligation PaymentObligation? @relation(fields:[obligationId],references:[id],onDelete:Restrict)
+  user User? @relation(fields:[userId],references:[id],onDelete:Restrict)
+  @@index([journalKey])
+  @@index([obligationId,createdAt])
+}
+model PaymentProviderEvent {
+  id String @id @default(cuid())
+  provider String
+  externalEventId String
+  obligationId String?
+  eventType String
+  payload Json
+  source String
+  processedAt DateTime?
+  receivedAt DateTime @default(now())
+  obligation PaymentObligation? @relation(fields:[obligationId],references:[id],onDelete:Restrict)
+  @@unique([provider,externalEventId])
+}
+model PaymentAudit {
+  id String @id @default(cuid())
+  actorId String?
+  entityType String
+  entityId String
+  action String
+  details Json?
+  createdAt DateTime @default(now())
+  actor User? @relation(fields:[actorId],references:[id],onDelete:SetNull)
+  @@index([entityType,entityId,createdAt])
+}
+model VerificationEvidence {
+  id String @id @default(cuid())
+  transactionId String
+  submittedByUserId String
+  type String
+  fileId String? @unique
+  fileUrl String?
+  description String
+  reviewStatus EvidenceReviewStatus @default(PENDING)
+  createdAt DateTime @default(now())
+  transaction ReferralTransaction @relation(fields:[transactionId],references:[id],onDelete:Restrict)
+  submittedBy User @relation(fields:[submittedByUserId],references:[id],onDelete:Restrict)
+  file UploadedEvidence? @relation(fields:[fileId],references:[id],onDelete:Restrict)
+  @@index([transactionId,reviewStatus])
+}
+model PossibleRewardMatch {
+  id String @id @default(cuid())
+  userId String
+  referralTransactionId String
+  provider String
+  externalTransactionId String
+  merchantName String
+  amountCents Int
+  date DateTime
+  confidence Int
+  status RewardMatchStatus @default(POSSIBLE_MATCH)
+  createdAt DateTime @default(now())
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  transaction ReferralTransaction @relation(fields:[referralTransactionId],references:[id],onDelete:Restrict)
+  @@unique([provider,externalTransactionId])
+}
+model ExternalVerificationEvent {
+  id String @id @default(cuid())
+  programId String
+  referralTransactionId String
+  provider String
+  externalEventId String
+  eventType String
+  payload Json
+  receivedAt DateTime @default(now())
+  verified Boolean @default(false)
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  transaction ReferralTransaction @relation(fields:[referralTransactionId],references:[id],onDelete:Restrict)
+  @@unique([provider,externalEventId])
+}
+
+
+enum MonitoringPriority {
+  HIGH
+  NORMAL
+  LOW
+}
+enum ExtractionConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+enum OfferReviewStatus {
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+enum TargetedOfferStatus {
+  SUBMITTED
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+enum OfferChangeType {
+  REFERRER_REWARD_CHANGED
+  REFERRED_REWARD_CHANGED
+  QUALIFICATION_CHANGED
+  MINIMUM_SPEND_CHANGED
+  MAX_REFERRALS_CHANGED
+  EXPIRATION_CHANGED
+  PROGRAM_STARTED
+  PROGRAM_ENDED
+  TERMS_CHANGED
+  URL_CHANGED
+  RESTRICTION_CHANGED
+  OTHER
+}
+enum SourceType {
+  OFFICIAL_REFERRAL_PAGE
+  OFFICIAL_TERMS
+  OFFICIAL_HELP_PAGE
+  API
+  PARTNER_FEED
+  ADMIN_SOURCE
+  OTHER
+}
+enum OfferVariantType {
+  PUBLIC
+  TARGETED
+  LOCATION_SPECIFIC
+  PRODUCT_SPECIFIC
+  ACCOUNT_SPECIFIC
+  PROMOTIONAL
+  EMPLOYEE
+  BUSINESS
+  OTHER
+}
+model ProgramSource {
+  id String @id @default(cuid())
+  programId String
+  sourceType SourceType
+  url String
+  priority Int @default(1)
+  active Boolean @default(true)
+  requiresAuthentication Boolean @default(false)
+  adapter String @default("generic")
+  lastCheckedAt DateTime?
+  lastStatus String?
+  notes String @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  snapshots ProgramSourceSnapshot[]
+  @@unique([programId,url])
+}
+model ProgramSourceSnapshot {
+  id String @id @default(cuid())
+  sourceId String
+  runId String
+  retrievedAt DateTime @default(now())
+  statusCode Int?
+  contentHash String?
+  structuredData Json?
+  extractionConfidence ExtractionConfidence @default(LOW)
+  error String?
+  isDemo Boolean @default(false)
+  source ProgramSource @relation(fields:[sourceId],references:[id],onDelete:Restrict)
+  run MonitoringRun @relation(fields:[runId],references:[id],onDelete:Restrict)
+  offers ProgramOffer[]
+  terms ProgramTermsSnapshot[]
+  @@index([sourceId,retrievedAt])
+}
+model ProgramOfferVariant {
+  id String @id @default(cuid())
+  programId String
+  scopeKey String
+  type OfferVariantType
+  country String?
+  state String?
+  city String?
+  product String?
+  description String @default("")
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  offers ProgramOffer[]
+  @@unique([programId,scopeKey])
+}
+model ProgramOffer {
+  id String @id @default(cuid())
+  programId String
+  variantId String?
+  scopeKey String @default("PUBLIC")
+  referrerRewardType RewardType @default(CASH)
+  referrerRewardAmount Int?
+  referrerRewardCurrency String @default("USD")
+  estimatedReferrerValueCents Int?
+  referredRewardType RewardType @default(CASH)
+  referredRewardAmount Int?
+  referredRewardCurrency String @default("USD")
+  qualificationRequirement String @default("")
+  minimumSpendCents Int?
+  minimumDepositCents Int?
+  maxReferrals Int?
+  qualificationDays Int?
+  expiresAt DateTime?
+  countries String[] @default([])
+  officialReferralUrl String?
+  active Boolean?
+  restrictionNotes String?
+  validFrom DateTime @default(now())
+  validUntil DateTime?
+  detectedAt DateTime @default(now())
+  verifiedAt DateTime?
+  verificationMethod String?
+  reviewStatus OfferReviewStatus @default(PENDING_REVIEW)
+  isCurrent Boolean @default(false)
+  sourceUrl String?
+  sourceSnapshotId String?
+  isDemo Boolean @default(false)
+  program Program @relation("ProgramOffers",fields:[programId],references:[id],onDelete:Restrict)
+  currentForProgram Program? @relation("CurrentPublicOffer")
+  variant ProgramOfferVariant? @relation(fields:[variantId],references:[id],onDelete:Restrict)
+  snapshot ProgramSourceSnapshot? @relation(fields:[sourceSnapshotId],references:[id],onDelete:Restrict)
+  previousChanges ProgramOfferChange[] @relation("PreviousOffer")
+  nextChanges ProgramOfferChange[] @relation("NewOffer")
+  listings ReferralListing[]
+  @@index([programId,scopeKey,detectedAt])
+}
+model ProgramOfferChange {
+  id String @id @default(cuid())
+  programId String
+  previousOfferId String?
+  newOfferId String?
+  changeType OfferChangeType
+  detectedAt DateTime @default(now())
+  sourceUrl String?
+  confidence ExtractionConfidence
+  reviewStatus OfferReviewStatus @default(PENDING_REVIEW)
+  details Json?
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  previousOffer ProgramOffer? @relation("PreviousOffer",fields:[previousOfferId],references:[id],onDelete:Restrict)
+  newOffer ProgramOffer? @relation("NewOffer",fields:[newOfferId],references:[id],onDelete:Restrict)
+  reviews MonitoringReview[]
+  @@index([programId,detectedAt])
+}
+model ProgramTermsSnapshot {
+  id String @id @default(cuid())
+  programId String
+  sourceSnapshotId String @unique
+  sourceUrl String
+  retrievedAt DateTime @default(now())
+  contentHash String
+  summary String
+  termsVersion String
+  detectedChanges Json?
+  isDemo Boolean @default(false)
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  sourceSnapshot ProgramSourceSnapshot @relation(fields:[sourceSnapshotId],references:[id],onDelete:Restrict)
+  @@index([programId,retrievedAt])
+}
+model MonitoringRun {
+  id String @id @default(cuid())
+  runKey String @unique
+  startedAt DateTime @default(now())
+  completedAt DateTime?
+  leaseUntil DateTime
+  programsQueued Int @default(0)
+  programsChecked Int @default(0)
+  programsUpdated Int @default(0)
+  changesDetected Int @default(0)
+  manualReviewsCreated Int @default(0)
+  failures Int @default(0)
+  status String @default("RUNNING")
+  error String?
+  snapshots ProgramSourceSnapshot[]
+}
+model MonitoringReview {
+  id String @id @default(cuid())
+  programId String
+  changeId String?
+  targetedOfferId String?
+  type String
+  reason String
+  status String @default("PENDING")
+  correctedData Json?
+  reviewedById String?
+  reviewedAt DateTime?
+  createdAt DateTime @default(now())
+  dedupeKey String @unique
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  change ProgramOfferChange? @relation(fields:[changeId],references:[id],onDelete:Restrict)
+  targetedOffer TargetedReferralOffer? @relation(fields:[targetedOfferId],references:[id],onDelete:Restrict)
+  reviewedBy User? @relation(fields:[reviewedById],references:[id],onDelete:SetNull)
+  @@index([status,createdAt])
+}
+model TargetedReferralOffer {
+  id String @id @default(cuid())
+  programId String
+  userId String
+  referrerRewardType RewardType
+  referrerRewardAmount Int
+  referrerRewardCurrency String
+  estimatedReferrerValueCents Int?
+  referredRewardType RewardType?
+  referredRewardAmount Int?
+  referredRewardCurrency String?
+  qualificationRequirement String
+  expiresAt DateTime?
+  evidenceType String
+  submittedAt DateTime @default(now())
+  verifiedAt DateTime?
+  lastVerifiedAt DateTime?
+  verificationExpiresAt DateTime?
+  verificationStatus TargetedOfferStatus @default(PENDING_REVIEW)
+  reviewedById String?
+  notes String @default("")
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  listings ReferralListing[]
+  evidence TargetedOfferEvidence[]
+  reviews MonitoringReview[]
+  @@index([verificationStatus,verificationExpiresAt])
+  @@index([programId,userId])
+}
+model TargetedOfferEvidence {
+  id String @id @default(cuid())
+  targetedOfferId String
+  fileName String
+  mimeType String
+  sizeBytes Int
+  data Bytes
+  createdAt DateTime @default(now())
+  offer TargetedReferralOffer @relation(fields:[targetedOfferId],references:[id],onDelete:Restrict)
+}
+model ProgramFollow {
+  id String @id @default(cuid())
+  programId String
+  userId String
+  notifyRewardIncrease Boolean @default(true)
+  notifyTermsChange Boolean @default(true)
+  program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  @@unique([programId,userId])
+}
+
+enum RequestStatus {
+ OPEN
+ ACCEPTED
+ CANCELLED
+}
+enum BidStatus {
+ SUBMITTED
+ ACCEPTED
+ WITHDRAWN
+ DECLINED
+}
+model ReferralRequest {
+ id String @id @default(cuid())
+ userId String
+ programId String
+ desiredBountyCents Int
+ notes String @default("")
+ expiresAt DateTime
+ status RequestStatus @default(OPEN)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+ program Program @relation(fields:[programId],references:[id],onDelete:Restrict)
+ bids ReferralBid[]
+ @@index([status,expiresAt])
+ @@index([userId,createdAt])
+}
+model ReferralBid {
+ id String @id @default(cuid())
+ requestId String
+ referrerId String
+ listingId String
+ bountyCents Int
+ message String @default("")
+ status BidStatus @default(SUBMITTED)
+ transactionId String? @unique
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ request ReferralRequest @relation(fields:[requestId],references:[id],onDelete:Restrict)
+ referrer User @relation(fields:[referrerId],references:[id],onDelete:Restrict)
+ listing ReferralListing @relation(fields:[listingId],references:[id],onDelete:Restrict)
+ transaction ReferralTransaction? @relation(fields:[transactionId],references:[id],onDelete:Restrict)
+ @@unique([requestId,referrerId])
+ @@index([referrerId,status])
 }

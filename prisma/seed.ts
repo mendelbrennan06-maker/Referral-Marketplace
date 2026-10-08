@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { PrismaClient, TransactionStatus } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { calculateFees } from "../src/lib/marketplace";
+import { calculateLegacyFees as calculateFees } from "../src/lib/marketplace";
 
 const db = new PrismaClient();
 const DAY = 86_400_000;
@@ -165,7 +165,7 @@ async function seed() {
       await tx.referralTransaction.upsert({
         where: { id: item.id }, update: {},
         create: {
-          id: item.id, listingId: item.listing.id, programId: `demo-program-${item.listing.program.slug}`,
+          paymentModel:"LEGACY_WALLET", totalDebitCents:item.bountyCents, id: item.id, listingId: item.listing.id, programId: `demo-program-${item.listing.program.slug}`,
           referrerId: `demo-user-${item.listing.referrer.key}`, referredUserId: "demo-user-customer",
           bountyCents: item.bountyCents, feeCents: item.feeCents, netPayoutCents: item.netPayoutCents,
           reservedCents: isPaid ? 0 : item.bountyCents, status: item.status, isDemo: true, createdAt,

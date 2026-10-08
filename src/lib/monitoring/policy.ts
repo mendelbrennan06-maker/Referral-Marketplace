@@ -1,0 +1,19 @@
+import { z } from 'zod';
+import type { OfferChangeType } from '@prisma/client';
+export const factsSchema=z.object({
+ scopeKey:z.string().max(100).optional(),referrerRewardType:z.enum(['CASH','POINTS','MILES','CREDIT','GIFT_CARD','DISCOUNT','FREE_SERVICE','OTHER']).optional(),referrerRewardAmount:z.number().int().nonnegative().max(100000000).nullable().optional(),referrerRewardCurrency:z.enum(['USD','POINTS','MILES','CREDIT','UNITS']).optional(),estimatedReferrerValueCents:z.number().int().nonnegative().max(100000000).nullable().optional(),referredRewardType:z.enum(['CASH','POINTS','MILES','CREDIT','GIFT_CARD','DISCOUNT','FREE_SERVICE','OTHER']).optional(),referredRewardAmount:z.number().int().nonnegative().max(100000000).nullable().optional(),referredRewardCurrency:z.enum(['USD','POINTS','MILES','CREDIT','UNITS']).optional(),qualificationRequirement:z.string().max(2000).optional(),minimumSpendCents:z.number().int().nonnegative().max(100000000).nullable().optional(),minimumDepositCents:z.number().int().nonnegative().max(100000000).nullable().optional(),maxReferrals:z.number().int().min(0).max(100000).nullable().optional(),qualificationDays:z.number().int().min(0).max(3650).nullable().optional(),expiresAt:z.iso.datetime().nullable().optional(),countries:z.array(z.string().regex(/^[A-Z]{2}$/)).max(100).optional(),officialReferralUrl:z.url().max(2048).nullable().optional(),active:z.boolean().nullable().optional(),restrictionNotes:z.string().max(2000).nullable().optional(),
+});
+export type OfferFacts=z.infer<typeof factsSchema>;
+const keys:Partial<Record<keyof OfferFacts,OfferChangeType>>={referrerRewardAmount:'REFERRER_REWARD_CHANGED',referrerRewardType:'REFERRER_REWARD_CHANGED',referredRewardAmount:'REFERRED_REWARD_CHANGED',referredRewardType:'REFERRED_REWARD_CHANGED',qualificationRequirement:'QUALIFICATION_CHANGED',qualificationDays:'QUALIFICATION_CHANGED',minimumSpendCents:'MINIMUM_SPEND_CHANGED',minimumDepositCents:'MINIMUM_SPEND_CHANGED',maxReferrals:'MAX_REFERRALS_CHANGED',expiresAt:'EXPIRATION_CHANGED',active:'PROGRAM_ENDED',officialReferralUrl:'URL_CHANGED',restrictionNotes:'RESTRICTION_CHANGED',countries:'QUALIFICATION_CHANGED'};
+export function compareOffers(previous:OfferFacts,next:OfferFacts){
+ const changes:{type:OfferChangeType;field:string;previous:unknown;next:unknown}[]=[];
+ for(const key of Object.keys(next) as (keyof OfferFacts)[]){if(next[key]===undefined||JSON.stringify(previous[key])===JSON.stringify(next[key]))continue;const type=key==='active'&&next[key]===true?'PROGRAM_STARTED':keys[key]||'OTHER';changes.push({type,field:key,previous:previous[key]??null,next:next[key]??null});}return changes;
+}
+export function mayAutoPublish(confidence:string,changes:ReturnType<typeof compareOffers>,sourceType:string){
+ if(confidence!=='HIGH'||!['OFFICIAL_REFERRAL_PAGE','API','PARTNER_FEED'].includes(sourceType)||!changes.length)return false;
+ return changes.every(c=>['REFERRER_REWARD_CHANGED','REFERRED_REWARD_CHANGED'].includes(c.type)&&typeof c.previous==='number'&&typeof c.next==='number'&&c.previous>0&&Math.abs(c.next-c.previous)/c.previous<=0.5);
+}
+export function nextCheck(now:Date,hours=24){if(!Number.isInteger(hours)||hours<1||hours>720)throw new Error('Monitoring frequency must be 1–720 hours.');return new Date(now.getTime()+hours*3600000);}
+export function freshness(verifiedAt:Date|null,now=new Date()){if(!verifiedAt)return 'UNKNOWN';const age=now.getTime()-verifiedAt.getTime();return age<48*3600000?'FRESH':age<=7*86400000?'RECENT':'STALE';}
+export function targetedOfferValid(o:{verificationStatus:string;verificationExpiresAt:Date|null;expiresAt:Date|null},now=new Date()){return o.verificationStatus==='VERIFIED'&&!!o.verificationExpiresAt&&o.verificationExpiresAt>now&&(!o.expiresAt||o.expiresAt>now);}
+export const sourceOrder={OFFICIAL_REFERRAL_PAGE:1,OFFICIAL_TERMS:2,OFFICIAL_HELP_PAGE:3,API:5,PARTNER_FEED:5,ADMIN_SOURCE:6,OTHER:7};

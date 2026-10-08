@@ -21,7 +21,7 @@ function integerInRange(value: number, min: number, max: number, name: string) {
   }
 }
 
-export function calculateFees(bountyCents: number, config: FeeConfig = DEFAULT_FEE_CONFIG) {
+export function calculateLegacyFees(bountyCents: number, config: FeeConfig = DEFAULT_FEE_CONFIG) {
   integerInRange(bountyCents, 0, MAX_MONEY_CENTS, "Bounty");
   integerInRange(config.percentageBps, 0, 10_000, "Fee percentage");
   integerInRange(config.fixedCents, 0, MAX_MONEY_CENTS, "Fixed fee");
@@ -39,7 +39,17 @@ export function calculateFees(bountyCents: number, config: FeeConfig = DEFAULT_F
   return { bountyCents, feeCents, netPayoutCents: bountyCents - feeCents };
 }
 
+export function calculateFees(bountyCents: number, config: FeeConfig = DEFAULT_FEE_CONFIG) {
+  calculateLegacyFees(bountyCents, config);
+  const percentage=Number((BigInt(bountyCents)*BigInt(config.percentageBps)+5000n)/10000n);
+  const feeCents=Math.min(config.maxCents ?? MAX_MONEY_CENTS,Math.max(config.minCents,percentage+config.fixedCents));
+  const totalDebitCents = bountyCents + feeCents;
+  integerInRange(totalDebitCents, 0, MAX_MONEY_CENTS, "Total debit");
+  return { bountyCents, feeCents, netPayoutCents: bountyCents, totalDebitCents };
+}
+
 type ProgramEligibility = {
+  catalogActive?: boolean;
   restrictionStatus: string;
   publicSharingAllowed: boolean;
   cashBountyAllowed: boolean;
@@ -48,7 +58,7 @@ type ProgramEligibility = {
 
 /** UNKNOWN programs stay disabled, including known brands seeded for demonstration. */
 export function canUseProgram(program: ProgramEligibility) {
-  return program.restrictionStatus === "ALLOWED" && program.publicSharingAllowed &&
+  return program.catalogActive !== false && program.restrictionStatus === "ALLOWED" && program.publicSharingAllowed &&
     program.cashBountyAllowed && program.thirdPartyMarketplaceAllowed;
 }
 
