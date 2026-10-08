@@ -31,6 +31,13 @@ jobs:
       - run: npm ci
       - run: npm run db:generate && npm run db:migrate && npm run db:seed && npm run catalog:prepare
       - run: npm run typecheck && npm run lint && npm test && npm run test:integration && npm run build
-      - run: npx playwright install --with-deps chromium
+      - name: Prepare browser
+        run: |
+          browser_path=$(command -v google-chrome || command -v chromium || true)
+          if [ -n "$browser_path" ]; then
+            echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$browser_path" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - run: npm run start > /tmp/refermarket.log 2>&1 &
       - run: npm run test:e2e
