@@ -94,3 +94,5 @@ New routes: `/requests`, `/requests/new`, `/requests/[id]`, `/dashboard/requests
 The standard payment model is: the customer gets the full bounty, and the referrer pays the fee separately. No pre-funding is required. See [PAYMENTS.md](PAYMENTS.md), [MONITORING.md](MONITORING.md), [TARGETED_OFFERS.md](TARGETED_OFFERS.md), and [PROGRAM_CATALOG.md](PROGRAM_CATALOG.md).
 
 Local validation: `npm run db:migrate && npm run db:seed && npm run catalog:prepare`, then `npm run typecheck && npm run lint && npm test && npm run test:integration && npm run build`. Start the app and run `npm run test:e2e`. Integration/browser fixtures require an isolated loopback database and demo credentials. CI runs these checks with a dedicated PostgreSQL service.
+
+The homepage now uses locally bundled photographic placeholder imagery and current-offer overlays. Hybrid monitoring compares meaningful-content hashes before AI extraction, limits API calls per run, and validates official-domain search results before source review. See MONITORING.md for provider credentials, confidence rules, cache behavior, and configuration; missing AI/search credentials remain visibly unconfigured.

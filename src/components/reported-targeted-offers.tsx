@@ -1,0 +1,8 @@
+import { Money } from './ui';
+type Report={id:string;referrerRewardAmount:number;referrerRewardCurrency:string;referredRewardAmount:number|null;referredRewardCurrency:string|null};
+export function ReportedTargetedOffers({reports}:{reports:Report[]}) {
+ const unique=[...new Map(reports.map(r=>[r.id,r])).values()];if(!unique.length)return null;
+ function ranges(signup:boolean){const groups=new Map<string,number>();for(const report of unique){const amount=signup?report.referredRewardAmount:report.referrerRewardAmount;const currency=signup?report.referredRewardCurrency:report.referrerRewardCurrency;if(amount!==null&&currency)groups.set(currency,Math.max(groups.get(currency)||0,amount));}return [...groups].map(([currency,amount])=><span key={currency} className="targeted-reward">Up to {currency==='USD'?<Money cents={amount}/>:`${amount.toLocaleString('en-US')} ${currency.toLowerCase()}`}</span>);}
+ const signup=ranges(true);const referrer=ranges(false);
+ return <section className="reported-targeted panel"><div className="panel-header"><h2>Reported targeted offers</h2><span className="badge badge-warning">Account-specific</span></div><div className="panel-body"><div className="targeted-summary-grid">{signup.length>0&&<div><span className="label">Personalized signup offers</span>{signup}</div>}<div><span className="label">Account-specific referrer rewards</span>{referrer}</div></div><p>Availability varies by user and account. These reviewed reports belong to individual referrers and do not replace the official public offer. Compare their separate cash offers below.</p></div></section>;
+}

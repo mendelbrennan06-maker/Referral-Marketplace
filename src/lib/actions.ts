@@ -700,7 +700,7 @@ export async function adminMonitoringAction(_state:ActionState,data:FormData){
    const program=await tx.program.findUniqueOrThrow({where:{id:programId}});
    if(operation==='configure')await tx.program.update({where:{id:programId},data:{monitoringEnabled:checked(data,'monitoringEnabled'),monitoringFrequencyHours:integer(data,'frequencyHours',1,720),monitoringPriority:z.enum(['HIGH','NORMAL','LOW']).parse(input(data,'priority',10)),nextCheckAt:new Date()}});
    if(operation==='source'){
-    const url=input(data,'sourceUrl',2048);const type=z.enum(['OFFICIAL_REFERRAL_PAGE','OFFICIAL_TERMS','OFFICIAL_HELP_PAGE','API','PARTNER_FEED','ADMIN_SOURCE','OTHER']).parse(input(data,'sourceType',40));
+    const url=input(data,'sourceUrl',2048);const type=z.enum(['OFFICIAL_REFERRAL_PAGE','OFFICIAL_OFFER_PAGE','OFFICIAL_TERMS','OFFICIAL_HELP_PAGE','API','PARTNER_FEED','ADMIN_SOURCE','OTHER']).parse(input(data,'sourceType',40));
     if(!safeReferralUrl(url,program.officialDomain))throw new Error('Use an HTTPS URL on this program’s official domain. Cross-host partner feeds require a future approved adapter.');
     const sourceId=input(data,'sourceId',100);
     const values={url,sourceType:type,priority:integer(data,'sourcePriority',1,100),requiresAuthentication:checked(data,'requiresAuthentication'),active:true,adapter:'generic',notes:input(data,'sourceNotes',1000)};

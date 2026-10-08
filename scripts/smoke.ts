@@ -164,6 +164,9 @@ async function main() {
     pass('Anonymous dashboard and admin access redirect to login');
     await anonymous.goto('/');
     await anonymous.getByRole('heading', { level: 1 }).waitFor();
+    await anonymous.locator('.hero-photo img').waitFor();
+    assert(await anonymous.locator('.hero-photo img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0), 'The locally bundled lifestyle hero must load');
+    assert(await anonymous.locator('.hero-reward-card').count(), 'Hero overlay must show a real database offer or request CTA');
     await anonymous.screenshot({ path: `${artifacts}/home-desktop.png`, fullPage: true });
 
     const seller = await newPage('referrer');
@@ -209,6 +212,9 @@ async function main() {
     const listing = await db.referralListing.findFirstOrThrow({ where: { referrerId: sellerUser.id, notes: listingMarker } });
     assert.equal(listing.status, 'PENDING_APPROVAL');
     assert.equal(listing.bountyCents, 5_000);
+    await admin.goto('/admin?tab=monitoring');
+    await admin.getByText('Programs checked today', { exact: true }).waitFor();
+    await admin.getByText(/AI extraction:/).waitFor();
     await admin.goto('/admin?tab=listings');
     const approvalForm = actionForm(admin, 'listingId', listing.id);
     await approvalForm.locator('xpath=ancestor::details[1]/summary').click();

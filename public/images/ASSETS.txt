@@ -1,0 +1,6 @@
+referral-lifestyle-placeholder.png
+Locally bundled photographic placeholder generated with OpenAI image generation for this project on 2026-10-08.
+It is temporary campaign imagery, not a photograph of an actual customer or proof of payment.
+No remote image dependency, trademarks, or invented app UI. Replace this file with licensed campaign photography.
+The path, alt text, and responsive crop are defined in src/components/hero-visual.tsx.
+Offer overlays use database values and explicitly label demo offers; they do not claim a completed payment.

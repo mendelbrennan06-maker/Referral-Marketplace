@@ -6,9 +6,12 @@ import { canPaymentTransition, trustStatus } from './payment-policy';
 import type { ProviderEvent } from './payment-providers/types';
 type Tx=Prisma.TransactionClient;
 export async function paymentTransaction<T>(work:(tx:Tx)=>Promise<T>):Promise<T> {
- for(let attempt=0;attempt<4;attempt++) {
+ for(let attempt=0;attempt<5;attempt++) {
   try {return await db.$transaction(work,{isolationLevel:'Serializable',timeout:15000});}
-  catch(e){if(!(e instanceof Prisma.PrismaClientKnownRequestError && (e.code==='P2034'||e.code==='P2002'))||attempt===3) throw e;}
+  catch(e){if(!(e instanceof Prisma.PrismaClientKnownRequestError && (e.code==='P2034'||e.code==='P2002'))||attempt===4) throw e;
+   // Immediate retries can collide repeatedly under simultaneous bid/payment traffic.
+   await new Promise(resolve=>setTimeout(resolve,25*2**attempt+Math.floor(Math.random()*25)));
+  }
  }
  throw new Error('Concurrent payment update. Please retry.');
 }

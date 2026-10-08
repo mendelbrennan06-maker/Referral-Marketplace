@@ -208,6 +208,7 @@ model Program {
   monitoringFrequencyHours Int @default(24)
   monitoringPriority MonitoringPriority @default(NORMAL)
   lastCheckedAt DateTime?
+  lastChangedAt DateTime?
   nextCheckAt DateTime @default(now())
   lastSuccessfulCheckAt DateTime?
   consecutiveFailures Int @default(0)
@@ -919,6 +920,7 @@ enum OfferChangeType {
 }
 enum SourceType {
   OFFICIAL_REFERRAL_PAGE
+  OFFICIAL_OFFER_PAGE
   OFFICIAL_TERMS
   OFFICIAL_HELP_PAGE
   API
@@ -964,6 +966,12 @@ model ProgramSourceSnapshot {
   contentHash String?
   structuredData Json?
   extractionConfidence ExtractionConfidence @default(LOW)
+  confidenceScore Float?
+  rawSnapshotHash String?
+  extractionMethod String?
+  extractionStatus String?
+  sourceHashUnchanged Boolean @default(false)
+  extractionResult Json?
   error String?
   isDemo Boolean @default(false)
   source ProgramSource @relation(fields:[sourceId],references:[id],onDelete:Restrict)
@@ -1008,6 +1016,11 @@ model ProgramOffer {
   officialReferralUrl String?
   active Boolean?
   restrictionNotes String?
+  standardSignupBonus String?
+  referrerRewardSummary String?
+  publicPostingAllowed String?
+  incentiveSharingAllowed String?
+  targetedOfferPossible Boolean?
   validFrom DateTime @default(now())
   validUntil DateTime?
   detectedAt DateTime @default(now())
