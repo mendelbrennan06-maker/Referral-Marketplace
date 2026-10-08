@@ -1,7 +1,7 @@
 import { createHash,randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { isProductionMarketplace } from './environment';
+import { canAuthenticateAccount } from './environment';
 import type { AccountTokenPurpose } from '@prisma/client';
 import { db } from './db';
 import { sendAccountEmail } from './email';
@@ -60,6 +60,6 @@ export async function authenticateAccount(email:string,password:string){
  if(password.length>72||Buffer.byteLength(password,'utf8')>72)return null;
  const user=await db.user.findUnique({where:{email:normalizeEmail(email)}});
  const valid=await bcrypt.compare(password,user?.passwordHash||'$2b$12$K9Iy/YBOItdePAfoGnCioe2Q2hkOJuoGXFn.nJ/CXeb05md.fKa7K');
- if(!user||!valid||user.isSuspended||['CLOSED','SUSPENDED'].includes(user.accountStatus)||(isProductionMarketplace()&&user.isDemo&&user.role!=='ADMIN'))return null;
+ if(!user||!valid||user.isSuspended||['CLOSED','SUSPENDED'].includes(user.accountStatus)||!canAuthenticateAccount(user))return null;
  return user;
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validPassword,validUsername,normalizeEmail } from '../src/lib/account-policy';
-import { isProductionMarketplace,allowSimulation,assertMarketplaceAccount,publicData } from '../src/lib/environment';
+import { isProductionMarketplace,allowSimulation,assertMarketplaceAccount,publicData,canAuthenticateAccount } from '../src/lib/environment';
 import { paymentProvider,configuredProvider } from '../src/lib/payment-providers';
 import { DemoProgramMonitor } from '../src/lib/monitoring/adapters';
 import { settlementLabel } from '../src/lib/manual-settlement';
@@ -21,3 +21,11 @@ test('password policy permits long phrases and protects bcrypt byte limit',()=>{
 test('email and usernames normalize; reserved impersonation names rejected',()=>{assert.equal(normalizeEmail(' Example@Email.com '),'example@email.com');assert.equal(validUsername('Alice_123'),'alice_123');for(const u of ['admin','ADMIN','support','official-brand','a/b','two']){if(u==='two')continue;assert.throws(()=>validUsername(u));}});
 test('manual provider never reports funds as successfully moved',async()=>{const p=paymentProvider('manual');const r={idempotencyKey:'manual-test',amountCents:5000,currency:'USD' as const,methodReference:'none'};assert.equal((await p.debitUser(r)).status,'PENDING');assert.equal((await p.createPayout(r)).status,'PENDING');assert.equal((await p.refund(r)).status,'PENDING');assert.equal(settlementLabel('PAID','manual'),'PAID EXTERNALLY');assert.match(settlementLabel('CREATED','manual'),/AWAITING/);await assert.rejects(p.handleWebhook('{}',new Headers()),/administrator/);});
 test('unconfigured Turnstile does not pretend validation succeeded',async()=>{delete process.env.TURNSTILE_SECRET_KEY;await assert.rejects(new TurnstileProtection().verify('anything'),/not configured/);});
+
+test('production denies seeded admin login except the configured legacy owner',()=>{
+ process.env.APP_ENV='production';process.env.ADMIN_EMAIL='owner@example.com';
+ assert.equal(canAuthenticateAccount({isDemo:true,role:'ADMIN',email:'demo-admin@example.com'}),false);
+ assert.equal(canAuthenticateAccount({isDemo:true,role:'USER',email:'owner@example.com'}),false);
+ assert.equal(canAuthenticateAccount({isDemo:true,role:'ADMIN',email:'owner@example.com'}),true);
+ assert.equal(canAuthenticateAccount({isDemo:false,role:'ADMIN',email:'another-real-admin@example.com'}),true);
+});

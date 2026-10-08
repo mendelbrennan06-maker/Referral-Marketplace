@@ -3,7 +3,7 @@ import { cache } from 'react';
 import { createHmac, randomBytes } from 'node:crypto';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { isProductionMarketplace } from './environment';
+import { canAuthenticateAccount } from './environment';
 import { db } from '@/lib/db';
 
 export const SESSION_COOKIE = 'refermarket_session';
@@ -40,7 +40,7 @@ export const currentUser = cache(async () => {
   const session = await db.session.findUnique({
     where: { tokenHash: hashToken(token) }, include: { user: { include: { profile: true, wallet: true } } },
   });
-  if (!session || session.expiresAt <= new Date() || session.user.isSuspended || ['CLOSED','SUSPENDED'].includes(session.user.accountStatus) || (isProductionMarketplace() && session.user.isDemo && session.user.role !== 'ADMIN')) return null;
+  if (!session || session.expiresAt <= new Date() || session.user.isSuspended || ['CLOSED','SUSPENDED'].includes(session.user.accountStatus) || !canAuthenticateAccount(session.user)) return null;
   return session.user;
 });
 

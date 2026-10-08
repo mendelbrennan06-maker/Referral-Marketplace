@@ -1,4 +1,4 @@
-import { assertMarketplaceAccount,activeAccount } from './environment';
+import { assertMarketplaceAccount,activeAccount,canAuthenticateAccount } from './environment';
 import { Prisma, type ObligationStatus, type PaymentObligation, type AuthorizationScope, type VerificationLevel } from '@prisma/client';
 import { db } from './db';
 import { canUseProgram } from './marketplace';
@@ -24,7 +24,7 @@ export async function paymentNotice(tx:Tx,userId:string,type:string,title:string
 }
 async function activeUser(tx:Tx,id:string,admin=false) {
  const user=await tx.user.findUnique({where:{id},include:{profile:true}});
- if(!user||!activeAccount(user)||(admin&&user.role!=='ADMIN')) throw new Error(admin?'Administrator access required.':'Account unavailable.');
+ if(!user||user.isSuspended||user.accountStatus!=='ACTIVE'||(admin?(user.role!=='ADMIN'||!canAuthenticateAccount(user)):!activeAccount(user))) throw new Error(admin?'Administrator access required.':'Account unavailable.');
  if(!admin)assertMarketplaceAccount(user);
  return user;
 }

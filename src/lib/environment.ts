@@ -10,3 +10,10 @@ export function assertMarketplaceAccount(user: { isSuspended: boolean; accountSt
  if (!activeAccount(user)) throw new Error('Marketplace activity is unavailable for this account.');
  if (!user.emailVerified) throw new Error('Verify your email in account settings before using marketplace actions.');
 }
+
+/** Retain only the explicitly configured legacy owner admin, never other seeded credentials. */
+export function canAuthenticateAccount(user: { isDemo: boolean;role: string;email: string }) {
+ if(!isProductionMarketplace() || !user.isDemo)return true;
+ const owner=process.env.ADMIN_EMAIL?.trim().toLowerCase();
+ return user.role==='ADMIN'&&!!owner&&user.email.trim().toLowerCase()===owner;
+}

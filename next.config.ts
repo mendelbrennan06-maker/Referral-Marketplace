@@ -10,7 +10,10 @@ const config: NextConfig = {
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
       { key: "X-Frame-Options", value: "DENY" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" }
-    ] }];
+    ] }, ...['/verify-email','/reset-password'].map(source=>({source,headers:[
+      {key:'Referrer-Policy',value:'no-referrer'},
+      {key:'Cache-Control',value:'private, no-store'},
+    ]}))];
   }
 };
 export default config;
